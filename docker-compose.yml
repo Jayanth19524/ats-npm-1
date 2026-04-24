@@ -1,0 +1,45 @@
+# Full local dev stack — Postgres + LocalStack (S3) + Mailpit
+# Usage:
+#   docker compose up
+#
+# Ports:
+#   Postgres   → localhost:5433  (5433 to avoid conflict with any local Postgres on 5432)
+#   LocalStack → localhost:4566  (S3)
+#   Mailpit    → localhost:1025  (SMTP) | localhost:8025 (web UI)
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    ports:
+      - "5433:5432"   # host 5433 → container 5432 (avoids conflict with local Postgres)
+    environment:
+      POSTGRES_USER: pulse
+      POSTGRES_PASSWORD: pulse
+      POSTGRES_DB: pulse
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  localstack:
+    image: localstack/localstack:3
+    restart: unless-stopped
+    ports:
+      - "4566:4566"
+    environment:
+      SERVICES: s3
+      DEFAULT_REGION: us-east-1
+    volumes:
+      - localstack_data:/var/lib/localstack
+      - ./scripts/localstack-init:/etc/localstack/init/ready.d
+
+  mailhog:
+    # Mailpit = modern Mailhog replacement with native ARM64 support
+    image: axllent/mailpit:latest
+    restart: unless-stopped
+    ports:
+      - "1025:1025"   # SMTP
+      - "8025:8025"   # Web UI → http://localhost:8025
+
+volumes:
+  postgres_data:
+  localstack_data:
