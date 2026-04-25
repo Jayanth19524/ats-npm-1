@@ -14,6 +14,7 @@ import {
   activityTable,
 } from "../src/db/index.js";
 import bcrypt from "bcryptjs";
+import "dotenv/config";
 
 async function main() {
   await db.delete(activityTable);

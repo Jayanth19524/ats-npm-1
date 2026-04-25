@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { useMoveCandidate, useListStages } from "@/api-client";
 import {
   useGetCandidate,
   useListCandidateNotes,
@@ -30,6 +31,8 @@ import { Badge } from "@/components/ui/badge";
 import { initials, formatRelative, SOURCE_LABELS } from "@/lib/format";
 import { Mail, Phone, MapPin, Briefcase, Star, FileText, Send } from "lucide-react";
 import { toast } from "sonner";
+import { SelectValue } from "@radix-ui/react-select";
+import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
 
 export function CandidateDrawer({
   candidateId,
@@ -49,6 +52,34 @@ export function CandidateDrawer({
   const qc = useQueryClient();
   const [body, setBody] = useState("");
   const [emailOpen, setEmailOpen] = useState(false);
+  const move = useMoveCandidate();
+const stages = useListStages(candidate.data?.jobId ?? 0, {
+  query: { enabled: !!candidate.data?.jobId },
+});
+const [showResume, setShowResume] = useState(false);
+function moveCandidate(stageId: number) {
+  if (!candidate.data) return;
+
+  // 🚨 CRITICAL FIX
+  if (stageId === candidate.data.stageId) {
+    return; // do nothing
+  }
+
+  move.mutate(
+    {
+      id: candidate.data.id,
+      data: { stageId },
+    },
+    {
+      onSuccess: () => {
+        qc.invalidateQueries();
+      },
+      onError: () => {
+        toast.error("Move failed");
+      },
+    }
+  );
+}
 
   return (
     <Sheet open={open} onOpenChange={(v) => !v && onClose()}>
@@ -102,38 +133,59 @@ export function CandidateDrawer({
                 label={`Source: ${SOURCE_LABELS[candidate.data.source] ?? candidate.data.source}`}
               />
               {candidate.data.resumeUrl && (
-                <a
-                  href={candidate.data.resumeUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="flex items-center gap-2 text-foreground/80 hover:text-primary"
-                >
-                  <FileText className="w-4 h-4 text-muted-foreground" />
-                  View resume
-                </a>
-              )}
+  <Button
+    variant="outline"
+    size="sm"
+    className="gap-2"
+    onClick={() => setShowResume((v) => !v)}
+  >
+    <FileText className="w-4 h-4" />
+    {showResume ? "Hide resume" : "Preview resume"}
+  </Button>
+)}
+{showResume && candidate.data.resumeUrl && (
+  <div className="border rounded-md overflow-hidden h-[500px]">
+    <iframe
+      src={candidate.data.resumeUrl}
+      className="w-full h-full"
+      title="Resume Preview"
+    />
+  </div>
+)}
             </div>
 
-            <div className="flex gap-2">
-              <Button size="sm" className="gap-2" onClick={() => setEmailOpen(true)}>
-                <Send className="w-3.5 h-3.5" /> Send email
-              </Button>
-            </div>
+           <div className="flex gap-2 items-center">
+  <Button size="sm" className="gap-2" onClick={() => setEmailOpen(true)}>
+    <Send className="w-3.5 h-3.5" /> Send email
+  </Button>
 
-            <div>
-              <h4 className="font-medium text-sm mb-3">Stage history</h4>
-              <ol className="space-y-2 border-l border-border pl-4">
-                {candidate.data.history.map((h) => (
-                  <li key={h.id} className="relative text-sm">
-                    <span className="absolute -left-[19px] top-1.5 w-2 h-2 rounded-full bg-primary" />
-                    <div className="font-medium">{h.stageName}</div>
-                    <div className="text-xs text-muted-foreground">
-                      {formatRelative(h.movedAt)}
-                    </div>
-                  </li>
-                ))}
-              </ol>
-            </div>
+  {/* ✅ MOVE DROPDOWN */}
+  <Select
+  value={String(candidate.data.stageId)}
+  onValueChange={(v) => moveCandidate(Number(v))}
+>
+  <SelectTrigger className="w-[160px] h-8 text-xs">
+    <SelectValue placeholder="Move to stage" />
+  </SelectTrigger>
+
+  <SelectContent>
+    {stages.data?.map((stage) => (
+      <SelectItem key={stage.id} value={String(stage.id)}>
+        <div className="flex items-center gap-2">
+          {/* stage color dot like kanban */}
+          <div
+            className="w-2 h-2 rounded-full"
+            style={{ backgroundColor: stage.color }}
+          />
+          {stage.name}
+          {stage.id === candidate.data.stageId}
+        </div>
+      </SelectItem>
+    ))}
+  </SelectContent>
+</Select>
+</div>
+
 
             <div>
               <h4 className="font-medium text-sm mb-3">Notes</h4>

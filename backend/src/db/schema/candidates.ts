@@ -29,6 +29,9 @@ export const candidatesTable = pgTable("candidates", {
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),
+  score: integer("score"),                // final computed score (0–100)
+  yearsOfExperience: integer("yoe"),     // extracted or user input
+  skills: text("skills").array(),        // ["react", "node", ...]
 });
 
 export const candidateStagesTable = pgTable("candidate_stages", {

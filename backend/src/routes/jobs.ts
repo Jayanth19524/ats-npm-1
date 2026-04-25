@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { and, asc, eq, sql } from "drizzle-orm";
+import { and, asc, eq, isNull, sql } from "drizzle-orm";
 import {
   db,
   jobsTable,
@@ -30,7 +30,11 @@ router.get("/jobs", async (req, res): Promise<void> => {
     return;
   }
   const orgId = orgIdOf(req);
-  const filters = [eq(jobsTable.organizationId, orgId)];
+  // FIX: exclude soft-deleted jobs from list
+  const filters = [
+    eq(jobsTable.organizationId, orgId),
+    isNull(jobsTable.deletedAt),
+  ];
   if (q.data.status) filters.push(eq(jobsTable.status, q.data.status));
   const rows = await db
     .select()
@@ -65,7 +69,14 @@ router.get("/jobs/:id", async (req, res): Promise<void> => {
   const [job] = await db
     .select()
     .from(jobsTable)
-    .where(and(eq(jobsTable.id, params.data.id), eq(jobsTable.organizationId, orgId)));
+    .where(
+      and(
+        eq(jobsTable.id, params.data.id),
+        eq(jobsTable.organizationId, orgId),
+        // FIX: treat soft-deleted jobs as not found
+        isNull(jobsTable.deletedAt),
+      ),
+    );
   if (!job) {
     res.status(404).json({ error: "Job not found" });
     return;
@@ -88,7 +99,14 @@ router.patch("/jobs/:id", async (req, res): Promise<void> => {
   const [job] = await db
     .update(jobsTable)
     .set(parsed.data)
-    .where(and(eq(jobsTable.id, params.data.id), eq(jobsTable.organizationId, orgId)))
+    .where(
+      and(
+        eq(jobsTable.id, params.data.id),
+        eq(jobsTable.organizationId, orgId),
+        // FIX: prevent patching a soft-deleted job
+        isNull(jobsTable.deletedAt),
+      ),
+    )
     .returning();
   if (!job) {
     res.status(404).json({ error: "Job not found" });
@@ -104,7 +122,19 @@ router.delete("/jobs/:id", async (req, res): Promise<void> => {
     return;
   }
   const orgId = orgIdOf(req);
-  await db.delete(jobsTable).where(and(eq(jobsTable.id, params.data.id), eq(jobsTable.organizationId, orgId)));
+  // FIX: soft-delete the job by setting deleted_at instead of hard-deleting.
+  // This keeps the row (and its FK integrity) intact while excluding it from
+  // all queries that filter on isNull(jobsTable.deletedAt).
+  await db
+    .update(jobsTable)
+    .set({ deletedAt: new Date() })
+    .where(
+      and(
+        eq(jobsTable.id, params.data.id),
+        eq(jobsTable.organizationId, orgId),
+        isNull(jobsTable.deletedAt), // no-op if already deleted
+      ),
+    );
   res.sendStatus(204);
 });
 
@@ -118,7 +148,13 @@ router.get("/jobs/:id/stats", async (req, res): Promise<void> => {
   const [job] = await db
     .select()
     .from(jobsTable)
-    .where(and(eq(jobsTable.id, params.data.id), eq(jobsTable.organizationId, orgId)));
+    .where(
+      and(
+        eq(jobsTable.id, params.data.id),
+        eq(jobsTable.organizationId, orgId),
+        isNull(jobsTable.deletedAt),
+      ),
+    );
   if (!job) {
     res.status(404).json({ error: "Job not found" });
     return;

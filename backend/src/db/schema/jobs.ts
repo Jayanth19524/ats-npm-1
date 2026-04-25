@@ -13,6 +13,12 @@ export const jobsTable = pgTable("jobs", {
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),
+  // FIX: soft-delete — null = active job, non-null = deleted job.
+  // All dashboard/report queries must filter `deletedAt IS NULL` or
+  // JOIN with jobsTable and check this column.
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
+  requiredSkills: text("required_skills").array(),
+  minExperience: integer("min_experience"),
 });
 
 export type Job = typeof jobsTable.$inferSelect;

@@ -1,7 +1,8 @@
 import { Router, type IRouter } from "express";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import {
   db,
+  jobsTable,
   candidatesTable,
   stagesTable,
 } from "../db/index.js";
@@ -23,6 +24,7 @@ router.get("/reports/pipeline", async (req, res): Promise<void> => {
     return;
   }
   const orgId = orgIdOf(req);
+
   const stageFilters = [eq(stagesTable.organizationId, orgId)];
   if (q.data.jobId !== undefined) stageFilters.push(eq(stagesTable.jobId, q.data.jobId));
 
@@ -33,6 +35,15 @@ router.get("/reports/pipeline", async (req, res): Promise<void> => {
       count: sql<number>`count(${candidatesTable.id})::int`,
     })
     .from(stagesTable)
+    // FIX: join with jobs and exclude soft-deleted ones so stages from
+    // deleted jobs don't appear in the pipeline report
+    .innerJoin(
+      jobsTable,
+      and(
+        eq(jobsTable.id, stagesTable.jobId),
+        isNull(jobsTable.deletedAt),
+      ),
+    )
     .leftJoin(
       candidatesTable,
       and(
@@ -45,6 +56,7 @@ router.get("/reports/pipeline", async (req, res): Promise<void> => {
     .where(and(...stageFilters))
     .groupBy(stagesTable.name, stagesTable.position)
     .orderBy(stagesTable.position);
+
   const max = rows.length > 0 ? Number(rows[0].count) : 0;
   res.json(
     GetPipelineReportResponse.parse({
@@ -59,14 +71,23 @@ router.get("/reports/pipeline", async (req, res): Promise<void> => {
 
 router.get("/reports/sources", async (req, res): Promise<void> => {
   const orgId = orgIdOf(req);
+  // FIX: only count candidates on active (non-deleted) jobs
   const rows = await db
     .select({
       source: candidatesTable.source,
-      count: sql<number>`count(*)::int`,
+      count: sql<number>`count(${candidatesTable.id})::int`,
     })
     .from(candidatesTable)
+    .innerJoin(
+      jobsTable,
+      and(
+        eq(jobsTable.id, candidatesTable.jobId),
+        isNull(jobsTable.deletedAt),
+      ),
+    )
     .where(eq(candidatesTable.organizationId, orgId))
     .groupBy(candidatesTable.source);
+
   res.json(
     GetSourceReportResponse.parse(
       rows.map((r) => ({ source: r.source, count: Number(r.count) })),
@@ -84,28 +105,39 @@ router.get("/reports/timeseries", async (req, res): Promise<void> => {
   const days = q.data.days ?? 30;
   const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
 
+  // FIX: join with jobs and exclude soft-deleted ones in both timeseries queries
   const candRows = await db.execute(
-    sql`select to_char(date_trunc('day', created_at), 'YYYY-MM-DD') as d,
+    sql`select to_char(date_trunc('day', c.created_at), 'YYYY-MM-DD') as d,
                count(*)::int as c
-        from candidates
-        where created_at >= ${since} and organization_id = ${orgId}
+        from candidates c
+        join jobs j on j.id = c.job_id
+        where c.created_at >= ${since}
+          and c.organization_id = ${orgId}
+          and j.deleted_at is null
         group by d order by d`,
   );
+
   const hireRows = await db.execute(
     sql`select to_char(date_trunc('day', cs.moved_at), 'YYYY-MM-DD') as d,
                count(*)::int as c
         from candidate_stages cs
         join stages s on s.id = cs.stage_id
         join candidates c on c.id = cs.candidate_id
-        where cs.moved_at >= ${since} and lower(s.name) = 'hired' and c.organization_id = ${orgId}
+        join jobs j on j.id = c.job_id
+        where cs.moved_at >= ${since}
+          and lower(s.name) = 'hired'
+          and c.organization_id = ${orgId}
+          and j.deleted_at is null
         group by d order by d`,
   );
+
   const cMap = new Map<string, number>(
     (candRows.rows as Array<{ d: string; c: number }>).map((r) => [r.d, Number(r.c)]),
   );
   const hMap = new Map<string, number>(
     (hireRows.rows as Array<{ d: string; c: number }>).map((r) => [r.d, Number(r.c)]),
   );
+
   const points = [];
   for (let i = days - 1; i >= 0; i--) {
     const d = new Date(Date.now() - i * 24 * 60 * 60 * 1000);

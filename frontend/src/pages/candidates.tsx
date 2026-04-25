@@ -168,39 +168,41 @@ export function CandidatesPage() {
         }
       />
 
-      {(stages.isLoading || candidates.isLoading) && (
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
-          {Array.from({ length: 5 }).map((_, i) => (
-            <Skeleton key={i} className="h-96" />
-          ))}
-        </div>
-      )}
+      {(stages.isLoading || candidates.isLoading) ? (
+  <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
+    {Array.from({ length: 5 }).map((_, i) => (
+      <Skeleton key={i} className="h-96" />
+    ))}
+  </div>
+) : (
+  stages.data && (
+    <DndContext
+      sensors={sensors}
+      onDragStart={(e) => setDragId(Number(e.active.id))}
+      onDragCancel={() => setDragId(null)}
+      onDragEnd={onDragEnd}
+    >
+      <div className="flex gap-4 overflow-x-auto pb-4 scrollbar-thin">
+        {stages.data.map((stage) => (
+          <KanbanColumn
+            key={stage.id}
+            stage={stage}
+            cards={
+              candidates.data?.filter((c) => c.stageId === stage.id) ?? []
+            }
+            onOpen={setOpenCandidateId}
+          />
+        ))}
+      </div>
 
-      {stages.data && (
-        <DndContext
-          sensors={sensors}
-          onDragStart={(e) => setDragId(Number(e.active.id))}
-          onDragCancel={() => setDragId(null)}
-          onDragEnd={onDragEnd}
-        >
-          <div className="flex gap-4 overflow-x-auto pb-4 scrollbar-thin">
-            {stages.data.map((stage) => (
-              <KanbanColumn
-                key={stage.id}
-                stage={stage}
-                cards={candidates.data?.filter((c) => c.stageId === stage.id) ?? []}
-                onOpen={setOpenCandidateId}
-              />
-            ))}
-          </div>
-          <DragOverlay>
-            {draggingCandidate && (
-              <CandidateCard candidate={draggingCandidate} dragging />
-            )}
-          </DragOverlay>
-        </DndContext>
-      )}
-
+      <DragOverlay>
+        {draggingCandidate && (
+          <CandidateCard candidate={draggingCandidate} dragging />
+        )}
+      </DragOverlay>
+    </DndContext>
+  )
+)}
       <CandidateDrawer
         candidateId={openCandidateId}
         onClose={() => setOpenCandidateId(null)}

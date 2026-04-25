@@ -80,20 +80,28 @@ export function JobNewPage() {
           description: values.description ?? "",
         },
       });
-      for (const preset of STAGE_PRESETS) {
-        await createStage.mutateAsync({
-          jobId: job.id,
-          data: {
-            name: preset.name,
-            color: preset.color,
-            sendEmail: false,
-            createTask: false,
-          },
-        });
-      }
-      qc.invalidateQueries({ queryKey: getListJobsQueryKey() });
-      toast.success("Job created with default pipeline");
-      navigate(`/jobs/${job.id}`);
+      toast.success("Job created");
+
+// 🚀 NAVIGATE IMMEDIATELY
+navigate(`/jobs/${job.id}`);
+
+// 🔥 create stages in background (no await)
+Promise.all(
+  STAGE_PRESETS.map((preset) =>
+    createStage.mutateAsync({
+      jobId: job.id,
+      data: {
+        name: preset.name,
+        color: preset.color,
+        sendEmail: false,
+        createTask: false,
+      },
+    })
+  )
+);
+
+// optional
+qc.invalidateQueries();
     } catch (e) {
       toast.error("Could not create the job. Please try again.");
     }
@@ -238,7 +246,11 @@ export function JobNewPage() {
                   Continue <ArrowRight className="w-4 h-4" />
                 </Button>
               ) : (
-                <Button type="submit" disabled={createJob.isPending}>
+                <Button
+  type="button"
+  disabled={createJob.isPending}
+  onClick={form.handleSubmit(onSubmit)}
+>
                   {createJob.isPending ? "Creating…" : "Create job"}
                 </Button>
               )}
