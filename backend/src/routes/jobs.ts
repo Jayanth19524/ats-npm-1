@@ -20,6 +20,7 @@ import {
   GetJobStatsResponse,
 } from "../schemas/index.js";
 import { getViewer, orgIdOf } from "../lib/viewer";
+import { sanitizeRichText } from "../lib/sanitize.js";
 
 const router: IRouter = Router();
 
@@ -52,9 +53,13 @@ router.post("/jobs", async (req, res): Promise<void> => {
   }
   const viewer = await getViewer(req);
   const orgId = orgIdOf(req);
+  const data = {
+    ...parsed.data,
+    description: sanitizeRichText(parsed.data.description ?? ""),
+  };
   const [job] = await db
     .insert(jobsTable)
-    .values({ ...parsed.data, createdBy: viewer.id, organizationId: orgId })
+    .values({ ...data, createdBy: viewer.id, organizationId: orgId })
     .returning();
   res.status(201).json(GetJobResponse.parse(job));
 });
@@ -96,9 +101,15 @@ router.patch("/jobs/:id", async (req, res): Promise<void> => {
     return;
   }
   const orgId = orgIdOf(req);
+  const data = {
+    ...parsed.data,
+    ...(parsed.data.description !== undefined
+      ? { description: sanitizeRichText(parsed.data.description) }
+      : {}),
+  };
   const [job] = await db
     .update(jobsTable)
-    .set(parsed.data)
+    .set(data)
     .where(
       and(
         eq(jobsTable.id, params.data.id),

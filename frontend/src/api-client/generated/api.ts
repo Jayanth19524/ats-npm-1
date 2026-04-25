@@ -3028,7 +3028,7 @@ export const getGetTimeseriesReportQueryOptions = <
   const queryFn: QueryFunction<
     Awaited<ReturnType<typeof getTimeseriesReport>>
   > = ({ signal }) =>
-    getTimeseriesReport(params, { signal, ...requestOptions });
+      getTimeseriesReport(params, { signal, ...requestOptions });
 
   return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
     Awaited<ReturnType<typeof getTimeseriesReport>>,

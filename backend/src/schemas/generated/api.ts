@@ -69,6 +69,8 @@ export const ListJobsResponseItem = zod.object({
   department: zod.string(),
   createdBy: zod.number(),
   createdAt: zod.coerce.date(),
+  requiredSkills: zod.array(zod.string()).nullish(),
+  minExperience: zod.number().int().nullish(),
 });
 export const ListJobsResponse = zod.array(ListJobsResponseItem);
 
@@ -79,6 +81,8 @@ export const CreateJobBody = zod.object({
   location: zod.string().optional(),
   employmentType: zod.string().optional(),
   department: zod.string().optional(),
+  requiredSkills: zod.array(zod.string()).nullish(),
+  minExperience: zod.number().int().nonnegative().nullish(),
 });
 
 export const GetJobParams = zod.object({
@@ -95,6 +99,8 @@ export const GetJobResponse = zod.object({
   department: zod.string(),
   createdBy: zod.number(),
   createdAt: zod.coerce.date(),
+  requiredSkills: zod.array(zod.string()).nullish(),
+  minExperience: zod.number().int().nullish(),
 });
 
 export const UpdateJobParams = zod.object({
@@ -108,6 +114,8 @@ export const UpdateJobBody = zod.object({
   location: zod.string().optional(),
   employmentType: zod.string().optional(),
   department: zod.string().optional(),
+  requiredSkills: zod.array(zod.string()).nullish(),
+  minExperience: zod.number().int().nonnegative().nullish(),
 });
 
 export const UpdateJobResponse = zod.object({
@@ -120,6 +128,8 @@ export const UpdateJobResponse = zod.object({
   department: zod.string(),
   createdBy: zod.number(),
   createdAt: zod.coerce.date(),
+  requiredSkills: zod.array(zod.string()).nullish(),
+  minExperience: zod.number().int().nullish(),
 });
 
 export const DeleteJobParams = zod.object({

@@ -216,6 +216,8 @@ router.get("/public/jobs", async (_req, res): Promise<void> => {
       location: jobsTable.location,
       employmentType: jobsTable.employmentType,
       department: jobsTable.department,
+      requiredSkills: jobsTable.requiredSkills,
+      minExperience: jobsTable.minExperience,
       organizationId: jobsTable.organizationId,
       organizationName: organizationsTable.name,
       organizationSlug: organizationsTable.slug,

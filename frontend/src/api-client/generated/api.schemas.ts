@@ -61,6 +61,10 @@ export interface Job {
   department: string;
   createdBy: number;
   createdAt: string;
+  /** @nullable */
+  requiredSkills?: string[] | null;
+  /** @nullable */
+  minExperience?: number | null;
 }
 
 export type CreateJobInputStatus =
@@ -80,6 +84,10 @@ export interface CreateJobInput {
   location?: string;
   employmentType?: string;
   department?: string;
+  /** @nullable */
+  requiredSkills?: string[] | null;
+  /** @nullable */
+  minExperience?: number | null;
 }
 
 export type UpdateJobInputStatus =
@@ -99,6 +107,10 @@ export interface UpdateJobInput {
   location?: string;
   employmentType?: string;
   department?: string;
+  /** @nullable */
+  requiredSkills?: string[] | null;
+  /** @nullable */
+  minExperience?: number | null;
 }
 
 export type JobStatsByStageItem = {

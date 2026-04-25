@@ -112,11 +112,13 @@ function createResumeKey(originalFilename: string): string {
 }
 
 function createS3Client() {
-  const region = "us-east-1";
+  const region = process.env.AWS_REGION || "us-east-1";
   const endpoint = process.env.S3_ENDPOINT;
 
   return new S3Client({
     region,
+    requestChecksumCalculation: "WHEN_REQUIRED",
+    responseChecksumValidation: "WHEN_REQUIRED",
     ...(endpoint
       ? {
         endpoint,
