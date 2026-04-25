@@ -128,9 +128,27 @@ export function JobDetailPage() {
         <div className="lg:col-span-2 space-y-6">
           <Card className="p-6">
             <h2 className="font-semibold mb-3">About this role</h2>
-            <p className="text-sm text-foreground/80 whitespace-pre-wrap leading-relaxed">
-              {j.description || "No description yet."}
-            </p>
+            {(j.requiredSkills && j.requiredSkills.length > 0) ||
+            (typeof j.minExperience === "number" && j.minExperience > 0) ? (
+              <div className="flex flex-wrap items-center gap-1.5 mb-4">
+                {typeof j.minExperience === "number" && j.minExperience > 0 && (
+                  <Badge variant="secondary">
+                    {j.minExperience}+ {j.minExperience === 1 ? "year" : "years"} experience
+                  </Badge>
+                )}
+                {j.requiredSkills?.map((skill) => (
+                  <Badge key={skill} variant="outline">{skill}</Badge>
+                ))}
+              </div>
+            ) : null}
+            {j.description ? (
+              <div
+                className="prose prose-sm dark:prose-invert max-w-none text-foreground/80 leading-relaxed"
+                dangerouslySetInnerHTML={{ __html: j.description }}
+              />
+            ) : (
+              <p className="text-sm text-muted-foreground">No description yet.</p>
+            )}
           </Card>
 
           <Card className="p-6">

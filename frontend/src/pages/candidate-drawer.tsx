@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { useMoveCandidate, useListStages } from "@/api-client";
+import { useMoveCandidate, useListStages, useGetMe } from "@/api-client";
 import {
   useGetCandidate,
   useListCandidateNotes,
@@ -121,7 +121,11 @@ function moveCandidate(stageId: number) {
             </div>
 
             <div className="space-y-2 text-sm border-t border-border pt-4">
-              <DetailRow icon={Mail} label={candidate.data.email} />
+              <DetailRow
+                icon={Mail}
+                label={candidate.data.email}
+                href={`mailto:${candidate.data.email}`}
+              />
               {candidate.data.phone && (
                 <DetailRow icon={Phone} label={candidate.data.phone} />
               )}
@@ -249,6 +253,7 @@ function moveCandidate(stageId: number) {
             candidateId={candidate.data.id}
             candidateName={candidate.data.name}
             candidateEmail={candidate.data.email}
+            jobTitle={candidate.data.jobTitle ?? ""}
             onSent={() =>
               qc.invalidateQueries({
                 queryKey: getListCandidateNotesQueryKey(candidate.data!.id),
@@ -267,6 +272,7 @@ function SendEmailDialog({
   candidateId,
   candidateName,
   candidateEmail,
+  jobTitle,
   onSent,
 }: {
   open: boolean;
@@ -274,9 +280,11 @@ function SendEmailDialog({
   candidateId: number;
   candidateName: string;
   candidateEmail: string;
+  jobTitle: string;
   onSent: () => void;
 }) {
   const templates = useListTemplates({ query: { enabled: open } });
+  const me = useGetMe({ query: { enabled: open } });
   const [templateId, setTemplateId] = useState<string>("");
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
@@ -298,6 +306,26 @@ function SendEmailDialog({
       setSubject(tpl.subject);
       setBody(tpl.body);
     }
+  }
+
+  function fillVars(text: string): string {
+    const senderName = me.data?.name ?? "";
+    return text
+      .replace(/\{\{\s*candidate_name\s*\}\}/g, candidateName)
+      .replace(/\{\{\s*job_title\s*\}\}/g, jobTitle)
+      .replace(/\{\{\s*sender_name\s*\}\}/g, senderName);
+  }
+
+  function openInMailApp() {
+    if (!subject.trim() || !body.trim()) {
+      toast.error("Subject and message are required");
+      return;
+    }
+    const finalSubject = fillVars(subject);
+    const finalBody = fillVars(body);
+    const gmailUrl = `https://mail.google.com/mail/?view=cm&to=${encodeURIComponent(candidateEmail)}&su=${encodeURIComponent(finalSubject)}&body=${encodeURIComponent(finalBody)}`;
+    window.open(gmailUrl, "_blank");
+    onOpenChange(false);
   }
 
   async function send() {
@@ -384,14 +412,20 @@ function SendEmailDialog({
             </p>
           </div>
         </div>
-        <DialogFooter>
+        <DialogFooter className="sm:justify-between">
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={sending}>
             Cancel
           </Button>
-          <Button onClick={send} disabled={sending} className="gap-2">
-            <Send className="w-4 h-4" />
-            {sending ? "Sending…" : "Send"}
-          </Button>
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={send} disabled={sending} className="gap-2">
+              <Send className="w-4 h-4" />
+              {sending ? "Sending…" : "Send via server"}
+            </Button>
+            <Button onClick={openInMailApp} disabled={sending} className="gap-2">
+              <Mail className="w-4 h-4" />
+              Open in Gmail
+            </Button>
+          </div>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -401,14 +435,22 @@ function SendEmailDialog({
 function DetailRow({
   icon: Icon,
   label,
+  href,
 }: {
   icon: React.ElementType;
   label: string;
+  href?: string;
 }) {
   return (
     <div className="flex items-center gap-2 text-foreground/80">
       <Icon className="w-4 h-4 text-muted-foreground" />
-      {label}
+      {href ? (
+        <a href={href} className="hover:underline">
+          {label}
+        </a>
+      ) : (
+        label
+      )}
     </div>
   );
 }

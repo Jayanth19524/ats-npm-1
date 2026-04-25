@@ -3,7 +3,7 @@ import { useLocation } from "wouter";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { ArrowLeft, ArrowRight, Check } from "lucide-react";
+import { ArrowLeft, ArrowRight, Check, X } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
@@ -15,8 +15,8 @@ import { PageContainer, PageHeader } from "@/components/layout/PageHeader";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
 import {
   Select,
   SelectContent,
@@ -25,6 +25,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
+import { RichTextEditor } from "@/components/RichTextEditor";
 
 const schema = z.object({
   title: z.string().min(2, "Title is required"),
@@ -33,6 +34,13 @@ const schema = z.object({
   employmentType: z.string().min(1),
   status: z.enum(["draft", "open"]),
   description: z.string().optional(),
+  minExperience: z
+    .union([
+      z.coerce.number().int().min(0, "Must be 0 or greater").max(60),
+      z.literal("").transform(() => undefined),
+    ])
+    .optional(),
+  requiredSkills: z.array(z.string()).optional(),
 });
 type FormValues = z.infer<typeof schema>;
 
@@ -63,8 +71,32 @@ export function JobNewPage() {
       employmentType: "full_time",
       status: "open",
       description: "",
+      minExperience: undefined,
+      requiredSkills: [],
     },
   });
+  const [skillInput, setSkillInput] = useState("");
+  const requiredSkills = form.watch("requiredSkills") ?? [];
+
+  function addSkill() {
+    const value = skillInput.trim();
+    if (!value) return;
+    const current = form.getValues("requiredSkills") ?? [];
+    if (current.some((s) => s.toLowerCase() === value.toLowerCase())) {
+      setSkillInput("");
+      return;
+    }
+    form.setValue("requiredSkills", [...current, value], { shouldDirty: true });
+    setSkillInput("");
+  }
+  function removeSkill(skill: string) {
+    const current = form.getValues("requiredSkills") ?? [];
+    form.setValue(
+      "requiredSkills",
+      current.filter((s) => s !== skill),
+      { shouldDirty: true },
+    );
+  }
 
   const steps = ["Basics", "Details", "Review"];
 
@@ -82,26 +114,25 @@ export function JobNewPage() {
       });
       toast.success("Job created");
 
-// 🚀 NAVIGATE IMMEDIATELY
-navigate(`/jobs/${job.id}`);
+      // Navigate immediately
+      navigate(`/jobs/${job.id}`);
 
-// 🔥 create stages in background (no await)
-Promise.all(
-  STAGE_PRESETS.map((preset) =>
-    createStage.mutateAsync({
-      jobId: job.id,
-      data: {
-        name: preset.name,
-        color: preset.color,
-        sendEmail: false,
-        createTask: false,
-      },
-    })
-  )
-);
+      // Create stages in background
+      Promise.all(
+        STAGE_PRESETS.map((preset) =>
+          createStage.mutateAsync({
+            jobId: job.id,
+            data: {
+              name: preset.name,
+              color: preset.color,
+              sendEmail: false,
+              createTask: false,
+            },
+          })
+        )
+      );
 
-// optional
-qc.invalidateQueries();
+      qc.invalidateQueries();
     } catch (e) {
       toast.error("Could not create the job. Please try again.");
     }
@@ -169,6 +200,62 @@ qc.invalidateQueries();
                     <Input placeholder="Remote" {...form.register("location")} />
                   </Field>
                 </div>
+                <Field
+                  label="Minimum years of experience"
+                  error={form.formState.errors.minExperience?.message as string | undefined}
+                >
+                  <Input
+                    type="number"
+                    inputMode="numeric"
+                    min={0}
+                    max={60}
+                    placeholder="e.g. 3"
+                    {...form.register("minExperience")}
+                  />
+                </Field>
+                <Field label="Required skills">
+                  <div className="space-y-2">
+                    <div className="flex gap-2">
+                      <Input
+                        placeholder="Type a skill and press Enter (e.g. React, Figma)"
+                        value={skillInput}
+                        onChange={(e) => setSkillInput(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === ",") {
+                            e.preventDefault();
+                            addSkill();
+                          } else if (
+                            e.key === "Backspace" &&
+                            skillInput === "" &&
+                            requiredSkills.length > 0
+                          ) {
+                            removeSkill(requiredSkills[requiredSkills.length - 1]);
+                          }
+                        }}
+                      />
+                      <Button type="button" variant="outline" onClick={addSkill}>
+                        Add
+                      </Button>
+                    </div>
+                    {requiredSkills.length > 0 && (
+                      <div className="flex flex-wrap gap-1.5">
+                        {requiredSkills.map((skill) => (
+                          <Badge key={skill} variant="secondary" className="gap-1 pr-1">
+                            {skill}
+                            <button
+                              type="button"
+                              aria-label={`Remove ${skill}`}
+                              onClick={() => removeSkill(skill)}
+                              className="rounded hover:bg-muted-foreground/20 p-0.5"
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
+                          </Badge>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </Field>
               </>
             )}
 
@@ -205,11 +292,16 @@ qc.invalidateQueries();
                   </Select>
                 </Field>
                 <Field label="Description">
-                  <Textarea
-                    rows={6}
+                  <RichTextEditor
+                    value={form.watch("description") ?? ""}
+                    onChange={(html) =>
+                      form.setValue("description", html, { shouldDirty: true })
+                    }
                     placeholder="What does this role do? Who's the ideal candidate?"
-                    {...form.register("description")}
                   />
+                  <p className="text-xs text-muted-foreground mt-1">
+                    This is shown to candidates on the public job page before they apply.
+                  </p>
                 </Field>
               </>
             )}
@@ -223,6 +315,20 @@ qc.invalidateQueries();
                   <Row label="Location" value={form.watch("location") || "—"} />
                   <Row label="Type" value={form.watch("employmentType")} />
                   <Row label="Status" value={form.watch("status")} />
+                  <Row
+                    label="Min experience"
+                    value={
+                      typeof form.watch("minExperience") === "number"
+                        ? `${form.watch("minExperience")}+ years`
+                        : "—"
+                    }
+                  />
+                  <Row
+                    label="Skills"
+                    value={
+                      requiredSkills.length > 0 ? requiredSkills.join(", ") : "—"
+                    }
+                  />
                 </Card>
                 <p className="text-sm text-muted-foreground">
                   We'll add a default pipeline: Applied → Screening → Interview → Offer → Hired.
@@ -247,10 +353,10 @@ qc.invalidateQueries();
                 </Button>
               ) : (
                 <Button
-  type="button"
-  disabled={createJob.isPending}
-  onClick={form.handleSubmit(onSubmit)}
->
+                  type="button"
+                  disabled={createJob.isPending}
+                  onClick={form.handleSubmit(onSubmit)}
+                >
                   {createJob.isPending ? "Creating…" : "Create job"}
                 </Button>
               )}

@@ -18,6 +18,8 @@ interface PublicJob {
   location: string | null;
   employmentType: string | null;
   description: string | null;
+  requiredSkills?: string[] | null;
+  minExperience?: number | null;
   organizationName?: string | null;
   organizationSlug?: string | null;
 }
@@ -118,11 +120,24 @@ export function CareersJobPage() {
         {job.department && <span className="flex items-center gap-1.5"><Briefcase className="w-3.5 h-3.5" />{job.department}</span>}
         {job.location && <span className="flex items-center gap-1.5"><MapPin className="w-3.5 h-3.5" />{job.location}</span>}
         {job.employmentType && <Badge variant="secondary">{job.employmentType}</Badge>}
+        {typeof job.minExperience === "number" && job.minExperience > 0 && (
+          <Badge variant="secondary">
+            {job.minExperience}+ {job.minExperience === 1 ? "year" : "years"} experience
+          </Badge>
+        )}
       </div>
-      {job.description && (
-        <div className="prose prose-sm max-w-none mt-6 whitespace-pre-wrap text-foreground/90">
-          {job.description}
+      {job.requiredSkills && job.requiredSkills.length > 0 && (
+        <div className="mt-4 flex flex-wrap gap-1.5">
+          {job.requiredSkills.map((skill) => (
+            <Badge key={skill} variant="outline">{skill}</Badge>
+          ))}
         </div>
+      )}
+      {job.description && (
+        <div
+          className="prose prose-sm dark:prose-invert max-w-none mt-6 text-foreground/90"
+          dangerouslySetInnerHTML={{ __html: job.description }}
+        />
       )}
       <div className="mt-8">
         <Card>
