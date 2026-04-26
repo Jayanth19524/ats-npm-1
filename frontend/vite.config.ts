@@ -3,7 +3,7 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import path from "path";
 
-const apiTarget = process.env.VITE_API_PROXY_TARGET ?? "http://localhost:8080";
+const apiTarget = "https://ats-npm-1.onrender.com";
 const port = Number(process.env.PORT ?? 5173);
 
 export default defineConfig({
