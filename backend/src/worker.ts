@@ -1,4 +1,4 @@
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, isNull, isNotNull } from "drizzle-orm";
 import { db, candidatesTable, jobsTable } from "./db/index.js";
 import { extractSkills, extractTextFromPdf, extractYearsOfExperience } from "./lib/pdf.js";
 import { calculateScore } from "./lib/scoring.js";
@@ -17,20 +17,61 @@ async function streamToBuffer(stream: NodeJS.ReadableStream): Promise<Buffer> {
   });
 }
 
+async function scoreCandidate(candidate: typeof candidatesTable.$inferSelect, job: typeof jobsTable.$inferSelect): Promise<void> {
+  if (!candidate.resumeKey) return;
+
+  let text = "";
+  if (isS3Configured()) {
+    const resumeObj = await getResumeObject(candidate.resumeKey);
+    const buffer = await streamToBuffer(resumeObj.body);
+    const tempPath = path.join(os.tmpdir(), `resume-${candidate.id}.pdf`);
+    await fs.writeFile(tempPath, buffer);
+    text = await extractTextFromPdf(tempPath);
+    await fs.unlink(tempPath).catch(() => undefined);
+  } else {
+    const localPath = path.resolve(process.cwd(), "uploads", candidate.resumeKey);
+    text = await extractTextFromPdf(localPath);
+  }
+
+  if (!text || text.trim().length === 0) {
+    logger.warn(`Candidate ${candidate.id}: could not extract text from PDF, skipping`);
+    return;
+  }
+
+  const candidateSkills = extractSkills(text, job.requiredSkills || []);
+  const candidateYOE = extractYearsOfExperience(text);
+
+  const score = calculateScore(
+    candidateSkills,
+    candidateYOE,
+    job.requiredSkills,
+    job.minExperience,
+    text,             // resume text for description matching
+    job.description,  // job description
+  );
+
+  await db
+    .update(candidatesTable)
+    .set({ score, yearsOfExperience: candidateYOE, skills: candidateSkills })
+    .where(eq(candidatesTable.id, candidate.id));
+
+  logger.info(`Candidate ${candidate.id} (${candidate.name}): score=${score}, yoe=${candidateYOE}, skills=[${candidateSkills.join(", ")}]`);
+}
+
+// ─── Regular worker: scores only new unscored candidates ─────────────────────
+
 export async function processUnscoredCandidates() {
   try {
     const unscored = await db
-      .select({
-        candidate: candidatesTable,
-        job: jobsTable,
-      })
+      .select({ candidate: candidatesTable, job: jobsTable })
       .from(candidatesTable)
       .innerJoin(jobsTable, eq(candidatesTable.jobId, jobsTable.id))
       .where(
         and(
           isNull(candidatesTable.score),
-          eq(candidatesTable.resumeMimeType, "application/pdf")
-        )
+          eq(candidatesTable.resumeMimeType, "application/pdf"),
+          isNotNull(candidatesTable.resumeKey),
+        ),
       )
       .limit(10);
 
@@ -39,56 +80,10 @@ export async function processUnscoredCandidates() {
     logger.info(`Found ${unscored.length} unscored candidates. Processing...`);
 
     for (const { candidate, job } of unscored) {
-      if (!candidate.resumeKey) {
-        // Mark as processed with score 0 or similar if no resume?
-        // For now, skip
-        continue;
-      }
-
       try {
-        logger.info(`Scoring candidate ${candidate.id} (${candidate.name})`);
-
-        let text = "";
-        if (isS3Configured()) {
-            const resumeObj = await getResumeObject(candidate.resumeKey);
-            const buffer = await streamToBuffer(resumeObj.body);
-            // Write to a temp file because pdf-parse needs a buffer, but my extractTextFromPdf expects a path
-            // Actually I can just change extractTextFromPdf to accept buffer or path.
-            // Let's use a temp file for now to keep extractTextFromPdf as is, or just use pdf(buffer) directly.
-            const tempPath = path.join(os.tmpdir(), `resume-${candidate.id}.pdf`);
-            await fs.writeFile(tempPath, buffer);
-            text = await extractTextFromPdf(tempPath);
-            await fs.unlink(tempPath).catch(() => undefined);
-        } else {
-            // Local storage
-            const localPath = path.resolve(process.cwd(), "uploads", candidate.resumeKey);
-            text = await extractTextFromPdf(localPath);
-        }
-
-        const candidateSkills = extractSkills(text, job.requiredSkills || []);
-        const candidateYOE = extractYearsOfExperience(text);
-
-        const score = calculateScore(
-          candidateSkills,
-          candidateYOE,
-          job.requiredSkills,
-          job.minExperience
-        );
-
-        await db
-          .update(candidatesTable)
-          .set({
-            score,
-            yearsOfExperience: candidateYOE,
-            skills: candidateSkills,
-          })
-          .where(eq(candidatesTable.id, candidate.id));
-
-        logger.info(`Candidate ${candidate.id} scored: ${score}`);
+        await scoreCandidate(candidate, job);
       } catch (err) {
         logger.error({ err, candidateId: candidate.id }, "Failed to score candidate");
-        // Maybe update score to -1 to avoid infinite loop on failure?
-        // Or just log it and move on.
       }
     }
   } catch (err) {
@@ -96,13 +91,53 @@ export async function processUnscoredCandidates() {
   }
 }
 
+// ─── One-time rescore: rescores ALL candidates with PDF resumes ───────────────
+
+export async function rescoreAllCandidates() {
+  logger.info("=== Starting one-time rescore of ALL candidates ===");
+
+  const all = await db
+    .select({ candidate: candidatesTable, job: jobsTable })
+    .from(candidatesTable)
+    .innerJoin(jobsTable, eq(candidatesTable.jobId, jobsTable.id))
+    .where(
+      and(
+        eq(candidatesTable.resumeMimeType, "application/pdf"),
+        isNotNull(candidatesTable.resumeKey),
+      ),
+    );
+
+  if (all.length === 0) {
+    logger.info("No candidates with PDF resumes found.");
+    return;
+  }
+
+  logger.info(`Rescoring ${all.length} candidates...`);
+
+  let success = 0;
+  let failed = 0;
+
+  for (const { candidate, job } of all) {
+    try {
+      await scoreCandidate(candidate, job);
+      success++;
+    } catch (err) {
+      logger.error({ err, candidateId: candidate.id }, `Failed to rescore candidate ${candidate.id}`);
+      failed++;
+    }
+  }
+
+  logger.info(`=== Rescore complete: ${success} succeeded, ${failed} failed ===`);
+}
+
+// ─── Worker lifecycle ─────────────────────────────────────────────────────────
+
 let interval: NodeJS.Timeout | null = null;
 
 export function startWorker() {
   if (interval) return;
   logger.info("Starting resume scoring worker...");
-  interval = setInterval(processUnscoredCandidates, 30000); // Every 30 seconds
-  // Also run immediately
+  interval = setInterval(processUnscoredCandidates, 30000);
   void processUnscoredCandidates();
 }
 

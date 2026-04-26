@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { Link, useRoute } from "wouter";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -7,15 +7,19 @@ import {
   useListStages,
   useGetJobStats,
   useUpdateStage,
+  useDeleteStage,
+  useCreateStage,
   useListTemplates,
   useDeleteJob,
+  useUpdateJob,
+  getGetJobQueryKey,
   getListStagesQueryKey,
   getGetJobStatsQueryKey,
   getListJobsQueryKey,
 } from "@/api-client";
 import { useLocation } from "wouter";
-import { ArrowLeft, MapPin, Briefcase, Trash2, Mail, ListChecks } from "lucide-react";
-import { PageContainer, PageHeader } from "@/components/layout/PageHeader";
+import { ArrowLeft, MapPin, Briefcase, Trash2, Mail, Plus, X } from "lucide-react";
+import { PageContainer } from "@/components/layout/PageHeader";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
@@ -29,7 +33,19 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { STATUS_COLORS, formatDate } from "@/lib/format";
+
+const NEW_STAGE_DEFAULT_COLOR = "#6366f1";
 
 export function JobDetailPage() {
   const [, params] = useRoute("/jobs/:id");
@@ -40,7 +56,11 @@ export function JobDetailPage() {
   const stats = useGetJobStats(id, { query: { enabled: !!id } });
   const templates = useListTemplates();
   const deleteJob = useDeleteJob();
+  const updateJob = useUpdateJob();
+  const createStage = useCreateStage();
   const qc = useQueryClient();
+  const [newStageName, setNewStageName] = useState("");
+  const [confirmDeleteJob, setConfirmDeleteJob] = useState(false);
 
   useEffect(() => {
     document.title = job.data ? `${job.data.title} · Pulse` : "Job · Pulse";
@@ -68,6 +88,32 @@ export function JobDetailPage() {
   }
 
   const j = job.data;
+
+  const refreshStages = () => {
+    qc.invalidateQueries({ queryKey: getListStagesQueryKey(j.id) });
+    qc.invalidateQueries({ queryKey: getGetJobStatsQueryKey(j.id) });
+  };
+
+  const handleAddStage = async () => {
+    const name = newStageName.trim();
+    if (!name) return;
+    try {
+      await createStage.mutateAsync({
+        jobId: j.id,
+        data: {
+          name,
+          color: NEW_STAGE_DEFAULT_COLOR,
+          sendEmail: false,
+          createTask: false,
+        },
+      });
+      setNewStageName("");
+      refreshStages();
+    } catch {
+      toast.error("Could not add the stage. Please try again.");
+    }
+  };
+
   return (
     <PageContainer>
       <Link href="/jobs">
@@ -79,12 +125,44 @@ export function JobDetailPage() {
         <div>
           <div className="flex items-center gap-3 mb-2">
             <h1 className="text-3xl font-semibold tracking-tight">{j.title}</h1>
-            <Badge
-              variant="outline"
-              className={`${STATUS_COLORS[j.status] ?? ""} border-0 capitalize`}
+            <Select
+              value={j.status}
+              onValueChange={(v) => {
+                const next = v as "draft" | "open" | "on_hold" | "closed";
+                updateJob.mutate(
+                  { id: j.id, data: { status: next } },
+                  {
+                    onSuccess: () => {
+                      qc.invalidateQueries({ queryKey: getGetJobQueryKey(j.id) });
+                      qc.invalidateQueries({ queryKey: getListJobsQueryKey() });
+                      const labels: Record<string, string> = {
+                        draft: "Draft",
+                        open: "Open",
+                        on_hold: "On hold",
+                        closed: "Closed",
+                      };
+                      toast.success(`Status set to ${labels[next] ?? next}`);
+                    },
+                    onError: () => toast.error("Could not update status"),
+                  },
+                );
+              }}
             >
-              {j.status.replace("_", " ")}
-            </Badge>
+              <SelectTrigger
+                className={`h-7 w-auto gap-1.5 border-0 px-2.5 capitalize ${
+                  STATUS_COLORS[j.status] ?? ""
+                }`}
+                aria-label="Change job status"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="draft">Draft</SelectItem>
+                <SelectItem value="open">Open</SelectItem>
+                <SelectItem value="on_hold">On hold</SelectItem>
+                <SelectItem value="closed">Closed</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
           <div className="flex items-center gap-4 text-sm text-muted-foreground">
             <span className="flex items-center gap-1.5">
@@ -105,22 +183,44 @@ export function JobDetailPage() {
           <Button
             variant="ghost"
             size="icon"
-            onClick={() => {
-              if (!confirm("Delete this job and all its stages?")) return;
-              deleteJob.mutate(
-                { id: j.id },
-                {
-                  onSuccess: () => {
-                    qc.invalidateQueries({ queryKey: getListJobsQueryKey() });
-                    toast.success("Job deleted");
-                    navigate("/jobs");
-                  },
-                },
-              );
-            }}
+            onClick={() => setConfirmDeleteJob(true)}
+            aria-label="Delete job"
           >
             <Trash2 className="w-4 h-4 text-muted-foreground" />
           </Button>
+          <AlertDialog open={confirmDeleteJob} onOpenChange={setConfirmDeleteJob}>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Delete this job?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  "{j.title}" and all its pipeline stages will be removed. This
+                  can't be undone.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction
+                  className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                  onClick={() =>
+                    deleteJob.mutate(
+                      { id: j.id },
+                      {
+                        onSuccess: () => {
+                          qc.invalidateQueries({ queryKey: getListJobsQueryKey() });
+                          toast.success("Job deleted");
+                          navigate("/jobs");
+                        },
+                        onError: () =>
+                          toast.error("Could not delete this job."),
+                      },
+                    )
+                  }
+                >
+                  Delete job
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
         </div>
       </div>
 
@@ -152,11 +252,13 @@ export function JobDetailPage() {
           </Card>
 
           <Card className="p-6">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="font-semibold">Hiring pipeline</h2>
-              <p className="text-xs text-muted-foreground">
-                Configure automations triggered when a candidate enters a stage.
-              </p>
+            <div className="flex items-start justify-between mb-4 gap-4">
+              <div>
+                <h2 className="font-semibold">Hiring pipeline</h2>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Rename, recolor, add or remove stages, and configure automations.
+                </p>
+              </div>
             </div>
             <div className="space-y-3">
               {stages.data?.map((s) => (
@@ -164,11 +266,36 @@ export function JobDetailPage() {
                   key={s.id}
                   stage={s}
                   templates={templates.data ?? []}
-                  onUpdated={() => {
-                    qc.invalidateQueries({ queryKey: getListStagesQueryKey(j.id) });
-                  }}
+                  onChanged={refreshStages}
                 />
               ))}
+              {stages.data && stages.data.length === 0 && (
+                <p className="text-sm text-muted-foreground">
+                  No stages yet — add the first one below.
+                </p>
+              )}
+            </div>
+            <div className="flex gap-2 mt-4 pt-4 border-t border-border">
+              <Input
+                placeholder="Add a stage (e.g. Phone screen)"
+                value={newStageName}
+                onChange={(e) => setNewStageName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    handleAddStage();
+                  }
+                }}
+              />
+              <Button
+                type="button"
+                variant="outline"
+                onClick={handleAddStage}
+                disabled={createStage.isPending || !newStageName.trim()}
+                className="gap-1"
+              >
+                <Plus className="w-4 h-4" /> Add stage
+              </Button>
             </div>
           </Card>
         </div>
@@ -200,37 +327,108 @@ export function JobDetailPage() {
 function StageRow({
   stage,
   templates,
-  onUpdated,
+  onChanged,
 }: {
   stage: NonNullable<ReturnType<typeof useListStages>["data"]>[number];
   templates: NonNullable<ReturnType<typeof useListTemplates>["data"]>;
-  onUpdated: () => void;
+  onChanged: () => void;
 }) {
   const update = useUpdateStage();
-  const qc = useQueryClient();
+  const deleteStage = useDeleteStage();
+  const [name, setName] = useState(stage.name);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
+  // Keep local name in sync if the stage is reloaded with a new value.
+  useEffect(() => {
+    setName(stage.name);
+  }, [stage.name]);
 
   const patch = (data: Record<string, unknown>) => {
     update.mutate(
       { id: stage.id, data },
       {
-        onSuccess: () => {
-          onUpdated();
-          qc.invalidateQueries({ queryKey: getGetJobStatsQueryKey(stage.jobId) });
-        },
+        onSuccess: () => onChanged(),
       },
     );
+  };
+
+  const handleConfirmDelete = () => {
+    deleteStage.mutate(
+      { id: stage.id },
+      {
+        onSuccess: () => {
+          toast.success(`Stage "${stage.name}" deleted`);
+          onChanged();
+        },
+        onError: () => toast.error("Could not delete this stage."),
+      },
+    );
+  };
+
+  const commitName = () => {
+    const trimmed = name.trim();
+    if (!trimmed) {
+      setName(stage.name);
+      return;
+    }
+    if (trimmed !== stage.name) patch({ name: trimmed });
   };
 
   return (
     <Card className="p-4">
       <div className="flex items-center gap-3 mb-3">
-        <div
-          className="w-3 h-3 rounded-full"
-          style={{ backgroundColor: stage.color }}
+        <input
+          type="color"
+          value={stage.color}
+          onChange={(e) => patch({ color: e.target.value })}
+          className="w-7 h-7 rounded border border-border cursor-pointer"
+          aria-label={`Color for ${stage.name}`}
         />
-        <div className="font-medium">{stage.name}</div>
+        <Input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onBlur={commitName}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              (e.target as HTMLInputElement).blur();
+            }
+          }}
+          className="font-medium h-9 max-w-xs"
+        />
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="ml-auto"
+          onClick={() => setConfirmDelete(true)}
+          aria-label={`Delete ${stage.name}`}
+        >
+          <X className="w-4 h-4 text-muted-foreground" />
+        </Button>
+        <AlertDialog open={confirmDelete} onOpenChange={setConfirmDelete}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Delete this stage?</AlertDialogTitle>
+              <AlertDialogDescription>
+                The "{stage.name}" stage will be removed from this job's
+                pipeline. Any candidates currently in this stage will need to be
+                moved.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                onClick={handleConfirmDelete}
+              >
+                Delete stage
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </div>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+      <div className="text-sm">
         <div className="space-y-2">
           <div className="flex items-center justify-between gap-2">
             <label className="flex items-center gap-2 text-sm text-foreground/80">
@@ -260,29 +458,35 @@ function StageRow({
             </Select>
           )}
         </div>
-        <div className="space-y-2">
-          <div className="flex items-center justify-between gap-2">
-            <label className="flex items-center gap-2 text-sm text-foreground/80">
-              <ListChecks className="w-4 h-4 text-muted-foreground" />
-              Create task on entry
-            </label>
-            <Switch
-              checked={stage.createTask}
-              onCheckedChange={(v) => patch({ createTask: v })}
-            />
+        {/*
+          "Create task on entry" automation is intentionally hidden for now.
+          Re-enable by restoring the block below and re-importing ListChecks
+          from lucide-react.
+
+          <div className="space-y-2 mt-4">
+            <div className="flex items-center justify-between gap-2">
+              <label className="flex items-center gap-2 text-sm text-foreground/80">
+                <ListChecks className="w-4 h-4 text-muted-foreground" />
+                Create task on entry
+              </label>
+              <Switch
+                checked={stage.createTask}
+                onCheckedChange={(v) => patch({ createTask: v })}
+              />
+            </div>
+            {stage.createTask && (
+              <Input
+                defaultValue={stage.taskTitle ?? ""}
+                placeholder="Task title (e.g. Schedule onsite)"
+                onBlur={(e) =>
+                  e.target.value !== stage.taskTitle &&
+                  patch({ taskTitle: e.target.value })
+                }
+                className="h-9"
+              />
+            )}
           </div>
-          {stage.createTask && (
-            <Input
-              defaultValue={stage.taskTitle ?? ""}
-              placeholder="Task title (e.g. Schedule onsite)"
-              onBlur={(e) =>
-                e.target.value !== stage.taskTitle &&
-                patch({ taskTitle: e.target.value })
-              }
-              className="h-9"
-            />
-          )}
-        </div>
+        */}
       </div>
     </Card>
   );

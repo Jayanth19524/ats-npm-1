@@ -59,6 +59,7 @@ import type {
 
 import { customFetch } from "../custom-fetch";
 import type { ErrorType, BodyType } from "../custom-fetch";
+import zod from "zod";
 
 type AwaitedInput<T> = PromiseLike<T> | T;
 
@@ -3064,3 +3065,24 @@ export function useGetTimeseriesReport<
 
   return { ...query, queryKey: queryOptions.queryKey };
 }
+export const ListCandidatesResponseItem = zod.object({
+  id: zod.number(),
+  jobId: zod.number(),
+  name: zod.string(),
+  email: zod.string(),
+  phone: zod.string().nullish(),
+  location: zod.string().nullish(),
+  currentTitle: zod.string().nullish(),
+  resumeUrl: zod.string().nullish(),
+  resumeKey: zod.string().nullish(),
+  resumeFilename: zod.string().nullish(),
+  resumeMimeType: zod.string().nullish(),
+  resumeSize: zod.number().nullish(),
+  resumeUploadedAt: zod.coerce.date().nullish(),
+  avatarUrl: zod.string().nullish(),
+  source: zod.string(),
+  rating: zod.number().nullish(),
+  score: zod.number().int().nullish(),
+  stageId: zod.number(),
+  createdAt: zod.coerce.date(),
+});

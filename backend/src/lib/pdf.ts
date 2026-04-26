@@ -31,7 +31,9 @@ export function extractYearsOfExperience(text: string): number | null {
 
   const fallbackMatch = text.match(/(\d+)\+?\s*years?/gi);
   if (fallbackMatch) {
-    const years = fallbackMatch.map(m => parseInt(m.match(/\d+/)![0], 10));
+    const years = fallbackMatch.map(m =>
+      parseInt(m.match(/\d+/)![0], 10)
+    );
     return Math.max(...years);
   }
 
@@ -54,4 +56,35 @@ export function extractSkills(text: string, knownSkills: string[]): string[] {
   }
 
   return foundSkills;
+}
+
+const STOP_WORDS = new Set([
+  "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for",
+  "of", "with", "by", "from", "is", "are", "was", "were", "be", "been",
+  "have", "has", "had", "do", "does", "did", "will", "would", "could",
+  "should", "may", "might", "shall", "can", "need", "must", "we", "you",
+  "our", "your", "their", "this", "that", "these", "those", "it", "its",
+  "as", "if", "not", "also", "both", "all", "any", "each", "more", "most",
+  "other", "some", "such", "than", "then", "they", "them", "what", "which",
+  "who", "whom", "how", "when", "where", "why", "about", "above", "after",
+  "before", "between", "during", "into", "through", "under", "while",
+]);
+
+/**
+ * Extracts meaningful keywords from text.
+ */
+export function extractKeywords(text: string): Set<string> {
+  const words = text
+    .toLowerCase()
+    .replace(/[^a-z0-9+#.\s-]/g, " ")
+    .split(/\s+/)
+    .map((w) => w.trim())
+    .filter(
+      (w) =>
+        w.length > 3 &&
+        !STOP_WORDS.has(w) &&
+        !/^\d+$/.test(w)
+    );
+
+  return new Set(words);
 }

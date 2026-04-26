@@ -3,9 +3,12 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useMoveCandidate, useListStages, useGetMe } from "@/api-client";
 import {
   useGetCandidate,
+  useGetJob,
   useListCandidateNotes,
   useCreateCandidateNote,
   useListTemplates,
+  useUpdateCandidate,
+  getGetCandidateQueryKey,
   getListCandidateNotesQueryKey,
 } from "@/api-client";
 import {
@@ -49,10 +52,28 @@ export function CandidateDrawer({
     query: { enabled: open },
   });
   const createNote = useCreateCandidateNote();
+  const updateCandidate = useUpdateCandidate();
   const qc = useQueryClient();
   const [body, setBody] = useState("");
   const [emailOpen, setEmailOpen] = useState(false);
+  const [hoverRating, setHoverRating] = useState<number | null>(null);
   const move = useMoveCandidate();
+
+  function setRating(value: number | null) {
+    if (!candidate.data) return;
+    const id = candidate.data.id;
+    updateCandidate.mutate(
+      { id, data: { rating: value } },
+      {
+        onSuccess: () => {
+          qc.invalidateQueries({ queryKey: getGetCandidateQueryKey(id) });
+          qc.invalidateQueries({ queryKey: ["/api/candidates"] });
+          qc.invalidateQueries();
+        },
+        onError: () => toast.error("Couldn't update rating"),
+      },
+    );
+  }
 const stages = useListStages(candidate.data?.jobId ?? 0, {
   query: { enabled: !!candidate.data?.jobId },
 });
@@ -103,20 +124,51 @@ function moveCandidate(stageId: number) {
                     {candidate.data.currentTitle}
                   </p>
                 )}
-                {candidate.data.rating != null && (
-                  <div className="flex items-center gap-0.5 mt-1.5">
-                    {Array.from({ length: 5 }).map((_, i) => (
-                      <Star
+                <div
+                  className="flex items-center gap-0.5 mt-1.5"
+                  onMouseLeave={() => setHoverRating(null)}
+                  role="radiogroup"
+                  aria-label="Candidate rating"
+                >
+                  {Array.from({ length: 5 }).map((_, i) => {
+                    const value = i + 1;
+                    const current = hoverRating ?? candidate.data!.rating ?? 0;
+                    const filled = value <= current;
+                    return (
+                      <button
                         key={i}
-                        className={`w-3.5 h-3.5 ${
-                          i < candidate.data!.rating!
-                            ? "fill-amber-400 text-amber-400"
-                            : "text-muted-foreground/30"
-                        }`}
-                      />
-                    ))}
-                  </div>
-                )}
+                        type="button"
+                        aria-label={`${value} star${value === 1 ? "" : "s"}`}
+                        onMouseEnter={() => setHoverRating(value)}
+                        onClick={() =>
+                          setRating(
+                            candidate.data!.rating === value ? null : value,
+                          )
+                        }
+                        disabled={updateCandidate.isPending}
+                        className="p-0.5 rounded hover:scale-110 transition-transform focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
+                      >
+                        <Star
+                          className={`w-4 h-4 ${
+                            filled
+                              ? "fill-amber-400 text-amber-400"
+                              : "text-muted-foreground/40"
+                          }`}
+                        />
+                      </button>
+                    );
+                  })}
+                  {candidate.data.rating != null && (
+                    <button
+                      type="button"
+                      onClick={() => setRating(null)}
+                      disabled={updateCandidate.isPending}
+                      className="ml-2 text-[10px] text-muted-foreground hover:text-foreground disabled:opacity-50"
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
 
@@ -253,7 +305,7 @@ function moveCandidate(stageId: number) {
             candidateId={candidate.data.id}
             candidateName={candidate.data.name}
             candidateEmail={candidate.data.email}
-            jobTitle={candidate.data.jobTitle ?? ""}
+            jobId={candidate.data.jobId}
             onSent={() =>
               qc.invalidateQueries({
                 queryKey: getListCandidateNotesQueryKey(candidate.data!.id),
@@ -272,7 +324,7 @@ function SendEmailDialog({
   candidateId,
   candidateName,
   candidateEmail,
-  jobTitle,
+  jobId,
   onSent,
 }: {
   open: boolean;
@@ -280,11 +332,13 @@ function SendEmailDialog({
   candidateId: number;
   candidateName: string;
   candidateEmail: string;
-  jobTitle: string;
+  jobId: number;
   onSent: () => void;
 }) {
   const templates = useListTemplates({ query: { enabled: open } });
   const me = useGetMe({ query: { enabled: open } });
+  const job = useGetJob(jobId, { query: { enabled: open && !!jobId } });
+  const jobTitle = job.data?.title ?? "";
   const [templateId, setTemplateId] = useState<string>("");
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
@@ -411,6 +465,29 @@ function SendEmailDialog({
               Variables {`{{candidate_name}}`}, {`{{job_title}}`}, {`{{sender_name}}`} are filled in automatically.
             </p>
           </div>
+          {(subject.trim() || body.trim()) && (
+            <div className="rounded-md border bg-muted/40 p-3 space-y-2">
+              <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Preview
+              </div>
+              <div className="text-sm">
+                <div className="font-medium text-foreground">
+                  {fillVars(subject) || (
+                    <span className="text-muted-foreground italic">
+                      (no subject)
+                    </span>
+                  )}
+                </div>
+                <div className="mt-1 whitespace-pre-wrap text-foreground/80">
+                  {fillVars(body) || (
+                    <span className="text-muted-foreground italic">
+                      (no message)
+                    </span>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
         <DialogFooter className="sm:justify-between">
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={sending}>

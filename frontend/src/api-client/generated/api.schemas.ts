@@ -190,6 +190,7 @@ export interface Candidate {
   source: string;
   /** @nullable */
   rating?: number | null;
+  score?: number | null;
   stageId: number;
   createdAt: string;
 }

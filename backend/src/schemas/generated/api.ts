@@ -236,6 +236,7 @@ export const ListCandidatesResponseItem = zod.object({
   source: zod.string(),
   rating: zod.number().nullish(),
   stageId: zod.number(),
+  score: zod.number().int().nullish(),
   createdAt: zod.coerce.date(),
 });
 export const ListCandidatesResponse = zod.array(ListCandidatesResponseItem);

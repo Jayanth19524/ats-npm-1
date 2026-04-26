@@ -12,7 +12,7 @@ import {
 } from "@dnd-kit/core";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Plus, Star } from "lucide-react";
+import { Plus, Star, Check, ChevronsUpDown } from "lucide-react";
 import {
   useListJobs,
   useListStages,
@@ -32,12 +32,21 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
+import { cn } from "@/lib/utils";
 import { initials } from "@/lib/format";
 import { CandidateDrawer } from "./candidate-drawer";
 
@@ -56,12 +65,32 @@ export function CandidatesPage() {
   const [jobId, setJobId] = useState<number | null>(initialJobId);
   const [search, setSearch] = useState("");
   const [openCandidateId, setOpenCandidateId] = useState<number | null>(null);
+  const [jobPickerOpen, setJobPickerOpen] = useState(false);
+  const [showAllJobs, setShowAllJobs] = useState(false);
+
+  const visibleJobs = useMemo(() => {
+    const all = jobs.data ?? [];
+    if (showAllJobs) return all;
+    const active = all.filter(
+      (j) => j.status === "open" || j.status === "on_hold",
+    );
+    if (jobId && !active.some((j) => j.id === jobId)) {
+      const selected = all.find((j) => j.id === jobId);
+      if (selected) return [selected, ...active];
+    }
+    return active;
+  }, [jobs.data, showAllJobs, jobId]);
+
+  const selectedJob = useMemo(
+    () => jobs.data?.find((j) => j.id === jobId) ?? null,
+    [jobs.data, jobId],
+  );
 
   useEffect(() => {
-    if (jobId === null && jobs.data && jobs.data.length > 0) {
-      setJobId(jobs.data[0].id);
+    if (jobId === null && visibleJobs.length > 0) {
+      setJobId(visibleJobs[0].id);
     }
-  }, [jobs.data, jobId]);
+  }, [visibleJobs, jobId]);
 
   const stages = useListStages(jobId ?? 0, {
     query: { enabled: !!jobId },
@@ -144,21 +173,70 @@ export function CandidatesPage() {
               onChange={(e) => setSearch(e.target.value)}
               className="w-56"
             />
-            <Select
-              value={jobId ? String(jobId) : ""}
-              onValueChange={(v) => setJobId(Number(v))}
-            >
-              <SelectTrigger className="w-56">
-                <SelectValue placeholder="Select a job" />
-              </SelectTrigger>
-              <SelectContent>
-                {jobs.data?.map((j) => (
-                  <SelectItem key={j.id} value={String(j.id)}>
-                    {j.title}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <Popover open={jobPickerOpen} onOpenChange={setJobPickerOpen}>
+              <PopoverTrigger asChild>
+                <Button
+                  variant="outline"
+                  role="combobox"
+                  aria-expanded={jobPickerOpen}
+                  className="w-56 justify-between font-normal"
+                >
+                  <span className="truncate">
+                    {selectedJob ? selectedJob.title : "Select a job"}
+                  </span>
+                  <ChevronsUpDown className="w-4 h-4 opacity-50 shrink-0 ml-2" />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-64 p-0" align="start">
+                <Command>
+                  <CommandInput placeholder="Search jobs…" />
+                  <CommandList>
+                    <CommandEmpty>No jobs found.</CommandEmpty>
+                    <CommandGroup>
+                      {visibleJobs.map((j) => (
+                        <CommandItem
+                          key={j.id}
+                          value={`${j.title} ${j.department ?? ""}`}
+                          onSelect={() => {
+                            setJobId(j.id);
+                            setJobPickerOpen(false);
+                          }}
+                          className="flex items-center justify-between gap-2"
+                        >
+                          <div className="flex items-center gap-2 min-w-0">
+                            <Check
+                              className={cn(
+                                "w-4 h-4 shrink-0",
+                                jobId === j.id ? "opacity-100" : "opacity-0",
+                              )}
+                            />
+                            <span className="truncate">{j.title}</span>
+                          </div>
+                          {j.status !== "open" && (
+                            <span className="text-xs text-muted-foreground capitalize shrink-0">
+                              {j.status.replace("_", " ")}
+                            </span>
+                          )}
+                        </CommandItem>
+                      ))}
+                    </CommandGroup>
+                  </CommandList>
+                  <div className="flex items-center justify-between gap-2 border-t px-3 py-2">
+                    <Label
+                      htmlFor="show-all-jobs"
+                      className="text-xs text-muted-foreground cursor-pointer"
+                    >
+                      Show all jobs (incl. draft & closed)
+                    </Label>
+                    <Switch
+                      id="show-all-jobs"
+                      checked={showAllJobs}
+                      onCheckedChange={setShowAllJobs}
+                    />
+                  </div>
+                </Command>
+              </PopoverContent>
+            </Popover>
             <Link href="/candidates/new">
               <Button className="gap-2">
                 <Plus className="w-4 h-4" /> Add candidate
@@ -307,20 +385,20 @@ function CandidateCard({
         <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
           {candidate.source}
         </span>
-        {candidate.rating != null && (
-          <div className="flex items-center gap-0.5">
-            {Array.from({ length: 5 }).map((_, i) => (
-              <Star
-                key={i}
-                className={`w-3 h-3 ${
-                  i < candidate.rating!
-                    ? "fill-amber-400 text-amber-400"
-                    : "text-muted-foreground/30"
-                }`}
-              />
-            ))}
-          </div>
-        )}
+        {candidate.score != null && (
+  <div className="flex items-center gap-0.5">
+    {Array.from({ length: 5 }).map((_, i) => (
+      <Star
+        key={i}
+        className={`w-3 h-3 ${
+          i < Math.round(candidate.score! / 20)
+            ? "fill-amber-400 text-amber-400"
+            : "text-muted-foreground/30"
+        }`}
+      />
+    ))}
+  </div>
+)}
       </div>
     </Card>
   );

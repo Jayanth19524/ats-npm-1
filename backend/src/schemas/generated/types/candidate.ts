@@ -33,7 +33,8 @@ export interface Candidate {
   avatarUrl?: string | null;
   source: string;
   /** @nullable */
-  rating?: number | null;
+  // rating?: number | null;
+  score?: number | null;
   stageId: number;
   createdAt: Date;
 }

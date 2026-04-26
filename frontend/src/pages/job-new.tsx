@@ -3,13 +3,15 @@ import { useLocation } from "wouter";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { ArrowLeft, ArrowRight, Check, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, Check, X, Plus, GripVertical } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
   useCreateJob,
   useCreateStage,
   getListJobsQueryKey,
+  getListStagesQueryKey,
+  getGetJobStatsQueryKey,
 } from "@/api-client";
 import { PageContainer, PageHeader } from "@/components/layout/PageHeader";
 import { Card } from "@/components/ui/card";
@@ -44,12 +46,25 @@ const schema = z.object({
 });
 type FormValues = z.infer<typeof schema>;
 
-const STAGE_PRESETS = [
+type StageDraft = { name: string; color: string };
+
+const STAGE_PRESETS: StageDraft[] = [
   { name: "Applied", color: "#94a3b8" },
   { name: "Screening", color: "#0ea5e9" },
   { name: "Interview", color: "#6366f1" },
   { name: "Offer", color: "#f59e0b" },
   { name: "Hired", color: "#10b981" },
+];
+
+const STAGE_COLOR_OPTIONS = [
+  "#94a3b8",
+  "#0ea5e9",
+  "#6366f1",
+  "#8b5cf6",
+  "#ec4899",
+  "#f59e0b",
+  "#10b981",
+  "#ef4444",
 ];
 
 export function JobNewPage() {
@@ -77,6 +92,8 @@ export function JobNewPage() {
   });
   const [skillInput, setSkillInput] = useState("");
   const requiredSkills = form.watch("requiredSkills") ?? [];
+  const [pipeline, setPipeline] = useState<StageDraft[]>(STAGE_PRESETS);
+  const [newStageName, setNewStageName] = useState("");
 
   function addSkill() {
     const value = skillInput.trim();
@@ -98,9 +115,40 @@ export function JobNewPage() {
     );
   }
 
-  const steps = ["Basics", "Details", "Review"];
+  function updateStage(index: number, patch: Partial<StageDraft>) {
+    setPipeline((prev) =>
+      prev.map((s, i) => (i === index ? { ...s, ...patch } : s)),
+    );
+  }
+  function removeStage(index: number) {
+    setPipeline((prev) => prev.filter((_, i) => i !== index));
+  }
+  function addStage() {
+    const name = newStageName.trim();
+    if (!name) return;
+    const nextColor =
+      STAGE_COLOR_OPTIONS[pipeline.length % STAGE_COLOR_OPTIONS.length];
+    setPipeline((prev) => [...prev, { name, color: nextColor }]);
+    setNewStageName("");
+  }
+  function moveStage(index: number, direction: -1 | 1) {
+    setPipeline((prev) => {
+      const next = [...prev];
+      const target = index + direction;
+      if (target < 0 || target >= next.length) return prev;
+      [next[index], next[target]] = [next[target], next[index]];
+      return next;
+    });
+  }
+
+  const steps = ["Basics", "Details", "Pipeline", "Review"];
 
   const onSubmit = async (values: FormValues) => {
+    if (pipeline.length === 0) {
+      toast.error("Add at least one pipeline stage before creating the job.");
+      setStep(2);
+      return;
+    }
     try {
       const job = await createJob.mutateAsync({
         data: {
@@ -110,38 +158,55 @@ export function JobNewPage() {
           employmentType: values.employmentType,
           status: values.status,
           description: values.description ?? "",
+          minExperience:
+            typeof values.minExperience === "number"
+              ? values.minExperience
+              : null,
+          requiredSkills: values.requiredSkills ?? [],
         },
       });
+      // Create the user-defined pipeline stages in order so the job page has
+      // something to show as soon as the user lands on it.
+      for (const stage of pipeline) {
+        await createStage.mutateAsync({
+          jobId: job.id,
+          data: {
+            name: stage.name,
+            color: stage.color,
+            sendEmail: false,
+            createTask: false,
+          },
+        });
+      }
+
+      // Make sure the job page reads the freshly-created stages and stats
+      // instead of an empty cached result.
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: getListJobsQueryKey() }),
+        qc.invalidateQueries({ queryKey: getListStagesQueryKey(job.id) }),
+        qc.invalidateQueries({ queryKey: getGetJobStatsQueryKey(job.id) }),
+      ]);
+
       toast.success("Job created");
-
-      // Navigate immediately
       navigate(`/jobs/${job.id}`);
-
-      // Create stages in background
-      Promise.all(
-        STAGE_PRESETS.map((preset) =>
-          createStage.mutateAsync({
-            jobId: job.id,
-            data: {
-              name: preset.name,
-              color: preset.color,
-              sendEmail: false,
-              createTask: false,
-            },
-          })
-        )
-      );
-
-      qc.invalidateQueries();
     } catch (e) {
       toast.error("Could not create the job. Please try again.");
     }
   };
 
   const next = async () => {
-    const valid = await form.trigger(
-      step === 0 ? ["title"] : ["employmentType"],
-    );
+    let valid = true;
+    if (step === 0) valid = await form.trigger(["title"]);
+    else if (step === 1) valid = await form.trigger(["employmentType"]);
+    else if (step === 2) {
+      if (pipeline.length === 0) {
+        toast.error("Add at least one pipeline stage to continue.");
+        valid = false;
+      } else if (pipeline.some((s) => !s.name.trim())) {
+        toast.error("Stage names cannot be empty.");
+        valid = false;
+      }
+    }
     if (valid) setStep(step + 1);
   };
 
@@ -149,7 +214,7 @@ export function JobNewPage() {
     <PageContainer>
       <PageHeader
         title="Create a new job"
-        description="Set up the role and we'll add a default 5-stage hiring pipeline."
+        description="Set up the role and customize the hiring pipeline that candidates will move through."
       />
       <div className="grid grid-cols-12 gap-8">
         <aside className="col-span-12 md:col-span-3">
@@ -210,7 +275,12 @@ export function JobNewPage() {
                     min={0}
                     max={60}
                     placeholder="e.g. 3"
-                    {...form.register("minExperience")}
+                    {...form.register("minExperience", {
+                      setValueAs: (v) =>
+                        v === "" || v === null || v === undefined
+                          ? undefined
+                          : Number(v),
+                    })}
                   />
                 </Field>
                 <Field label="Required skills">
@@ -308,6 +378,107 @@ export function JobNewPage() {
 
             {step === 2 && (
               <div className="space-y-4">
+                <div>
+                  <h3 className="font-semibold">Hiring pipeline</h3>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    Customize the stages candidates will move through. You can rename,
+                    reorder, add, or remove stages here, and edit them later from the job
+                    page.
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  {pipeline.map((stage, index) => (
+                    <div
+                      key={index}
+                      className="flex items-center gap-2 rounded-md border border-border p-2 bg-card"
+                    >
+                      <div className="flex flex-col">
+                        <button
+                          type="button"
+                          onClick={() => moveStage(index, -1)}
+                          disabled={index === 0}
+                          className="text-muted-foreground hover:text-foreground disabled:opacity-30"
+                          aria-label="Move stage up"
+                        >
+                          <GripVertical className="w-4 h-4 rotate-90" />
+                        </button>
+                      </div>
+                      <input
+                        type="color"
+                        value={stage.color}
+                        onChange={(e) =>
+                          updateStage(index, { color: e.target.value })
+                        }
+                        className="w-8 h-8 rounded border border-border cursor-pointer"
+                        aria-label={`Color for ${stage.name}`}
+                      />
+                      <Input
+                        value={stage.name}
+                        onChange={(e) =>
+                          updateStage(index, { name: e.target.value })
+                        }
+                        placeholder="Stage name"
+                        className="flex-1"
+                      />
+                      <span className="text-xs text-muted-foreground w-6 text-center tabular-nums">
+                        {index + 1}
+                      </span>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => moveStage(index, -1)}
+                        disabled={index === 0}
+                      >
+                        ↑
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => moveStage(index, 1)}
+                        disabled={index === pipeline.length - 1}
+                      >
+                        ↓
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => removeStage(index)}
+                        aria-label={`Remove ${stage.name}`}
+                      >
+                        <X className="w-4 h-4" />
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+                <div className="flex gap-2 pt-2 border-t border-border">
+                  <Input
+                    placeholder="Add a stage (e.g. Phone screen)"
+                    value={newStageName}
+                    onChange={(e) => setNewStageName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        addStage();
+                      }
+                    }}
+                  />
+                  <Button type="button" variant="outline" onClick={addStage} className="gap-1">
+                    <Plus className="w-4 h-4" /> Add stage
+                  </Button>
+                </div>
+                {pipeline.length === 0 && (
+                  <p className="text-xs text-destructive">
+                    Add at least one stage to continue.
+                  </p>
+                )}
+              </div>
+            )}
+
+            {step === 3 && (
+              <div className="space-y-4">
                 <h3 className="font-semibold">Review</h3>
                 <Card className="p-5 bg-muted/30">
                   <Row label="Title" value={form.watch("title")} />
@@ -330,10 +501,23 @@ export function JobNewPage() {
                     }
                   />
                 </Card>
-                <p className="text-sm text-muted-foreground">
-                  We'll add a default pipeline: Applied → Screening → Interview → Offer → Hired.
-                  You can customize automations on the job page.
-                </p>
+                <div>
+                  <p className="text-sm font-medium mb-2">Pipeline</p>
+                  <div className="flex flex-wrap items-center gap-2">
+                    {pipeline.map((stage, i) => (
+                      <div key={i} className="flex items-center gap-1.5">
+                        <span
+                          className="w-2.5 h-2.5 rounded-full"
+                          style={{ backgroundColor: stage.color }}
+                        />
+                        <span className="text-sm">{stage.name}</span>
+                        {i < pipeline.length - 1 && (
+                          <span className="text-muted-foreground mx-1">→</span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
               </div>
             )}
 
@@ -347,7 +531,7 @@ export function JobNewPage() {
                 <ArrowLeft className="w-4 h-4" />
                 {step === 0 ? "Cancel" : "Back"}
               </Button>
-              {step < 2 ? (
+              {step < steps.length - 1 ? (
                 <Button type="button" onClick={next} className="gap-2">
                   Continue <ArrowRight className="w-4 h-4" />
                 </Button>
