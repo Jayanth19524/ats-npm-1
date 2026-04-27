@@ -26,7 +26,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { cn } from "@/lib/utils";
+import { cn, formatEmploymentType } from "@/lib/utils";
 import { RichTextEditor } from "@/components/RichTextEditor";
 
 const schema = z.object({
@@ -484,7 +484,7 @@ export function JobNewPage() {
                   <Row label="Title" value={form.watch("title")} />
                   <Row label="Department" value={form.watch("department") || "—"} />
                   <Row label="Location" value={form.watch("location") || "—"} />
-                  <Row label="Type" value={form.watch("employmentType")} />
+                 <Row label="Type" value={formatEmploymentType(form.watch("employmentType"))} />
                   <Row label="Status" value={form.watch("status")} />
                   <Row
                     label="Min experience"

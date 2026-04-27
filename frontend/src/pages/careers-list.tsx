@@ -4,6 +4,7 @@ import { MapPin, Briefcase, Building2 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { formatEmploymentType } from "@/lib/utils";
 
 interface PublicJob {
   id: number;
@@ -104,7 +105,7 @@ export function CareersListPage() {
                   <div className="flex items-center gap-2 flex-wrap">
                     <h3 className="font-semibold text-base">{j.title}</h3>
                     {j.employmentType && (
-                      <Badge variant="secondary">{j.employmentType}</Badge>
+                     < Badge variant="secondary">{formatEmploymentType(j.employmentType)}</Badge>
                     )}
                   </div>
                   <div className="flex items-center gap-4 text-sm text-muted-foreground mt-1.5 flex-wrap">

@@ -10,6 +10,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import { useAuth } from "@/hooks/use-auth";
 import { ResumeUploader, type ResumeUploadResult } from "@/components/ResumeUploader";
+import { formatEmploymentType } from "@/lib/utils";
 
 interface PublicJob {
   id: number;
@@ -119,7 +120,7 @@ export function CareersJobPage() {
       <div className="flex items-center gap-4 text-sm text-muted-foreground mt-2 flex-wrap">
         {job.department && <span className="flex items-center gap-1.5"><Briefcase className="w-3.5 h-3.5" />{job.department}</span>}
         {job.location && <span className="flex items-center gap-1.5"><MapPin className="w-3.5 h-3.5" />{job.location}</span>}
-        {job.employmentType && <Badge variant="secondary">{job.employmentType}</Badge>}
+        {job.employmentType && <Badge variant="secondary">{formatEmploymentType(job.employmentType)}</Badge>}
         {typeof job.minExperience === "number" && job.minExperience > 0 && (
           <Badge variant="secondary">
             {job.minExperience}+ {job.minExperience === 1 ? "year" : "years"} experience
