@@ -193,6 +193,10 @@ export interface Candidate {
   score?: number | null;
   stageId: number;
   createdAt: string;
+  /** @nullable */
+  rejectedAt?: string | null;
+  /** @nullable */
+  rejectionReason?: string | null;
 }
 
 export interface StageHistoryItem {

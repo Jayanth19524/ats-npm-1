@@ -238,6 +238,8 @@ export const ListCandidatesResponseItem = zod.object({
   stageId: zod.number(),
   score: zod.number().int().nullish(),
   createdAt: zod.coerce.date(),
+  rejectedAt: zod.coerce.date().nullish(),
+  rejectionReason: zod.string().nullish(),
 });
 export const ListCandidatesResponse = zod.array(ListCandidatesResponseItem);
 
@@ -281,6 +283,8 @@ export const GetCandidateResponse = zod
     rating: zod.number().nullish(),
     stageId: zod.number(),
     createdAt: zod.coerce.date(),
+    rejectedAt: zod.coerce.date().nullish(),
+    rejectionReason: zod.string().nullish(),
   })
   .and(
     zod.object({

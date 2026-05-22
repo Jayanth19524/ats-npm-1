@@ -32,6 +32,8 @@ export const candidatesTable = pgTable("candidates", {
   score: integer("score"),                // final computed score (0–100)
   yearsOfExperience: integer("yoe"),     // extracted or user input
   skills: text("skills").array(),        // ["react", "node", ...]
+  rejectedAt: timestamp("rejected_at", { withTimezone: true }),
+  rejectionReason: text("rejection_reason"),
 });
 
 export const candidateStagesTable = pgTable("candidate_stages", {

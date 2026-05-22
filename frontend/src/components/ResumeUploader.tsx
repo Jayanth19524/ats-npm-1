@@ -49,8 +49,8 @@ export function ResumeUploader({ value, onChange }: ResumeUploaderProps) {
     }
   }
 
-  async function readFileHead(file: File): Promise<Uint8Array> {
-    const buffer = await file.slice(0, 512).arrayBuffer();
+  async function readFileHead(file: File, bytes = 512): Promise<Uint8Array> {
+    const buffer = await file.slice(0, bytes).arrayBuffer();
     return new Uint8Array(buffer);
   }
 
@@ -63,21 +63,113 @@ export function ResumeUploader({ value, onChange }: ResumeUploaderProps) {
     return !new TextDecoder("utf-8", { fatal: false }).decode(buffer).includes("\uFFFD");
   }
 
-  async function validateResumeContent(file: File, mimeType: string): Promise<void> {
-    const head = await readFileHead(file);
-    const asText = new TextDecoder("utf-8", { fatal: false }).decode(head).trimStart();
-    const isZip = startsWithBytes(head, [0x50, 0x4b]);
-    const isOleDoc = startsWithBytes(head, [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]);
+  // EICAR test signature (anti-virus probe). Stored split so this source
+  // file itself isn't a malware false-positive.
+  const EICAR_SIGNATURE =
+    "X5O!P%@AP[4\\PZX54(P^)7CC)7}$" +
+    "EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*";
 
+  function looksLikeExecutable(head: Uint8Array): string | null {
+    // Windows PE / DOS MZ
+    if (startsWithBytes(head, [0x4d, 0x5a])) return "Windows executable";
+    // ELF
+    if (startsWithBytes(head, [0x7f, 0x45, 0x4c, 0x46])) return "Linux executable";
+    // Mach-O (32/64, big/little endian) and fat binary
+    const machO = [
+      [0xfe, 0xed, 0xfa, 0xce],
+      [0xfe, 0xed, 0xfa, 0xcf],
+      [0xce, 0xfa, 0xed, 0xfe],
+      [0xcf, 0xfa, 0xed, 0xfe],
+      [0xca, 0xfe, 0xba, 0xbe],
+    ];
+    if (machO.some((b) => startsWithBytes(head, b))) return "Mach-O executable";
+    // Java class
+    if (startsWithBytes(head, [0xca, 0xfe, 0xba, 0xbe])) return "Java class file";
+    // Shell script shebang
+    if (startsWithBytes(head, [0x23, 0x21])) return "shell script";
+    return null;
+  }
+
+  async function scanFullForSignatures(
+    file: File,
+    needles: string[],
+  ): Promise<string | null> {
+    // Cap full scan at 4 MB; resumes larger than that on the malicious-content
+    // hot path are rare, and we already enforce an 8 MB upload cap.
+    const max = Math.min(file.size, 4 * 1024 * 1024);
+    const buffer = await file.slice(0, max).arrayBuffer();
+    const text = new TextDecoder("latin1").decode(new Uint8Array(buffer));
+    for (const n of needles) {
+      if (text.includes(n)) return n;
+    }
+    return null;
+  }
+
+  async function validateResumeContent(
+    file: File,
+    mimeType: string,
+  ): Promise<void> {
+    const head = await readFileHead(file);
+    const asText = new TextDecoder("utf-8", { fatal: false })
+      .decode(head)
+      .trimStart();
+    const isZip = startsWithBytes(head, [0x50, 0x4b]);
+    const isOleDoc = startsWithBytes(head, [
+      0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1,
+    ]);
+
+    // 1. Reject anything that smells like a binary executable, regardless of
+    // the claimed mime type.
+    const exec = looksLikeExecutable(head);
+    if (exec) {
+      throw new Error(
+        `This file looks like a ${exec}. Please upload a resume document.`,
+      );
+    }
+
+    // 2. Verify content matches the declared type.
     const ok =
-      (mimeType === "application/pdf" && new TextDecoder("ascii").decode(head.slice(0, 5)) === "%PDF-") ||
+      (mimeType === "application/pdf" &&
+        new TextDecoder("ascii").decode(head.slice(0, 5)) === "%PDF-") ||
       (mimeType === "application/msword" && isOleDoc) ||
-      (mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" && isZip) ||
+      (mimeType ===
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document" &&
+        isZip) ||
       (mimeType === "application/rtf" && asText.startsWith("{\\rtf")) ||
       (mimeType === "text/plain" && looksLikeText(head));
 
     if (!ok) {
-      throw new Error("The uploaded file content does not match its file type.");
+      throw new Error(
+        "The uploaded file content does not match its file type.",
+      );
+    }
+
+    // 3. EICAR test string (anti-virus / malware probe).
+    const eicarHit = await scanFullForSignatures(file, [EICAR_SIGNATURE]);
+    if (eicarHit) {
+      throw new Error(
+        "This file matched a known malware test signature and was blocked.",
+      );
+    }
+
+    // 4. PDF-specific: reject embedded JavaScript or auto-launch actions.
+    if (mimeType === "application/pdf") {
+      const hit = await scanFullForSignatures(file, [
+        "/JavaScript",
+        "/JS ",
+        "/JS\n",
+        "/JS\r",
+        "/JS<",
+        "/Launch",
+        "/OpenAction",
+        "/AA ",
+        "/AA<",
+      ]);
+      if (hit) {
+        throw new Error(
+          "This PDF contains embedded scripts or auto-launch actions and was blocked.",
+        );
+      }
     }
   }
 

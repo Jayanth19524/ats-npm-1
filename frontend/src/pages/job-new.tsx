@@ -28,6 +28,13 @@ import {
 } from "@/components/ui/select";
 import { cn, formatEmploymentType } from "@/lib/utils";
 import { RichTextEditor } from "@/components/RichTextEditor";
+import {
+  QuestionsBuilder,
+  validateQuestions,
+  serializeQuestions,
+  MAX_QUESTIONS,
+  type QuestionDraft,
+} from "@/components/ApplicationFormEditor";
 
 const schema = z.object({
   title: z.string().min(2, "Title is required"),
@@ -94,6 +101,7 @@ export function JobNewPage() {
   const requiredSkills = form.watch("requiredSkills") ?? [];
   const [pipeline, setPipeline] = useState<StageDraft[]>(STAGE_PRESETS);
   const [newStageName, setNewStageName] = useState("");
+  const [questions, setQuestions] = useState<QuestionDraft[]>([]);
 
   function addSkill() {
     const value = skillInput.trim();
@@ -141,12 +149,18 @@ export function JobNewPage() {
     });
   }
 
-  const steps = ["Basics", "Details", "Pipeline", "Review"];
+  const steps = ["Basics", "Details", "Pipeline", "Application form", "Review"];
 
   const onSubmit = async (values: FormValues) => {
     if (pipeline.length === 0) {
       toast.error("Add at least one pipeline stage before creating the job.");
       setStep(2);
+      return;
+    }
+    const questionsError = validateQuestions(questions);
+    if (questionsError) {
+      toast.error(questionsError);
+      setStep(3);
       return;
     }
     try {
@@ -179,6 +193,22 @@ export function JobNewPage() {
         });
       }
 
+      // Save the application form questions defined during creation, if any.
+      if (questions.length > 0) {
+        const r = await fetch(`/api/jobs/${job.id}/questions`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ questions: serializeQuestions(questions) }),
+        });
+        if (!r.ok) {
+          const body = await r.json().catch(() => ({}));
+          toast.error(
+            body.error ||
+              "Job was created but the application form could not be saved.",
+          );
+        }
+      }
+
       // Make sure the job page reads the freshly-created stages and stats
       // instead of an empty cached result.
       await Promise.all([
@@ -204,6 +234,12 @@ export function JobNewPage() {
         valid = false;
       } else if (pipeline.some((s) => !s.name.trim())) {
         toast.error("Stage names cannot be empty.");
+        valid = false;
+      }
+    } else if (step === 3) {
+      const error = validateQuestions(questions);
+      if (error) {
+        toast.error(error);
         valid = false;
       }
     }
@@ -478,6 +514,30 @@ export function JobNewPage() {
             )}
 
             {step === 3 && (
+              <div className="space-y-4">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <h3 className="font-semibold">Application form</h3>
+                    <p className="text-sm text-muted-foreground mt-1">
+                      Add up to {MAX_QUESTIONS} questions candidates will answer
+                      when applying. Name, email, phone, and resume are always
+                      collected — these are extra. You can edit this later from
+                      the job page.
+                    </p>
+                  </div>
+                  <Badge variant="secondary" className="shrink-0">
+                    {questions.length}/{MAX_QUESTIONS}
+                  </Badge>
+                </div>
+                <QuestionsBuilder
+                  questions={questions}
+                  onChange={setQuestions}
+                  emptyHint="No custom questions yet — that's fine. Candidates will only be asked for the basics. Add a question if you want extra info."
+                />
+              </div>
+            )}
+
+            {step === 4 && (
               <div className="space-y-4">
                 <h3 className="font-semibold">Review</h3>
                 <Card className="p-5 bg-muted/30">

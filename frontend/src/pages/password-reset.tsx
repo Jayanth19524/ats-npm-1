@@ -183,25 +183,3 @@ export function StaffResetPasswordPage() {
   );
 }
 
-export function CandidateForgotPasswordPage() {
-  return (
-    <div className="max-w-md mx-auto px-4 py-12">
-      <ForgotPasswordCard
-        audienceLabel="candidate"
-        endpoint="/api/auth/candidate/forgot-password"
-        backHref="/careers/login"
-      />
-    </div>
-  );
-}
-
-export function CandidateResetPasswordPage() {
-  return (
-    <div className="max-w-md mx-auto px-4 py-12">
-      <ResetPasswordCard
-        endpoint="/api/auth/candidate/reset-password"
-        backHref="/careers/login"
-      />
-    </div>
-  );
-}

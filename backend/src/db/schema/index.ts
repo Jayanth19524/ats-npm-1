@@ -9,3 +9,4 @@ export * from "./referrals";
 export * from "./templates";
 export * from "./activity";
 export * from "./password-reset-tokens";
+export * from "./job-questions";

@@ -32,7 +32,22 @@ import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { initials, formatRelative, SOURCE_LABELS } from "@/lib/format";
-import { Mail, Phone, MapPin, Briefcase, Star, FileText, Send } from "lucide-react";
+import { Mail, Phone, MapPin, Briefcase, Star, FileText, Send, Ban, Undo2, Loader2 } from "lucide-react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
+  getListCandidatesQueryKey,
+  getGetDashboardSummaryQueryKey,
+  getGetJobStatsQueryKey,
+} from "@/api-client";
 import { toast } from "sonner";
 import { SelectValue } from "@radix-ui/react-select";
 import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
@@ -57,7 +72,60 @@ export function CandidateDrawer({
   const [body, setBody] = useState("");
   const [emailOpen, setEmailOpen] = useState(false);
   const [hoverRating, setHoverRating] = useState<number | null>(null);
+  const [rejectOpen, setRejectOpen] = useState(false);
+  const [rejectReason, setRejectReason] = useState("");
   const move = useMoveCandidate();
+  const [isMoving, setIsMoving] = useState(false);
+
+  const candidateData = candidate.data as
+    | (NonNullable<typeof candidate.data> & {
+        rejectedAt?: string | null;
+        rejectionReason?: string | null;
+      })
+    | undefined;
+  const isRejected = !!candidateData?.rejectedAt;
+
+  function refreshCandidateLists() {
+    if (!candidateData) return;
+    qc.invalidateQueries({ queryKey: getGetCandidateQueryKey(candidateData.id) });
+    qc.invalidateQueries({ queryKey: getListCandidatesQueryKey() });
+    qc.invalidateQueries({ queryKey: getGetDashboardSummaryQueryKey() });
+    if (candidateData.jobId) {
+      qc.invalidateQueries({
+        queryKey: getGetJobStatsQueryKey(candidateData.jobId),
+      });
+    }
+  }
+
+  async function rejectCandidate() {
+    if (!candidateData) return;
+    const res = await fetch(`/api/candidates/${candidateData.id}/reject`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reason: rejectReason.trim() || undefined }),
+    });
+    if (!res.ok) {
+      toast.error("Could not reject candidate");
+      return;
+    }
+    toast.success("Candidate rejected");
+    setRejectOpen(false);
+    setRejectReason("");
+    refreshCandidateLists();
+  }
+
+  async function unrejectCandidate() {
+    if (!candidateData) return;
+    const res = await fetch(`/api/candidates/${candidateData.id}/unreject`, {
+      method: "POST",
+    });
+    if (!res.ok) {
+      toast.error("Could not restore candidate");
+      return;
+    }
+    toast.success("Candidate restored");
+    refreshCandidateLists();
+  }
 
   function setRating(value: number | null) {
     if (!candidate.data) return;
@@ -86,6 +154,7 @@ function moveCandidate(stageId: number) {
     return; // do nothing
   }
 
+  setIsMoving(true);
   move.mutate(
     {
       id: candidate.data.id,
@@ -93,9 +162,11 @@ function moveCandidate(stageId: number) {
     },
     {
       onSuccess: () => {
+        setIsMoving(false);
         qc.invalidateQueries();
       },
       onError: () => {
+        setIsMoving(false);
         toast.error("Move failed");
       },
     }
@@ -210,7 +281,31 @@ function moveCandidate(stageId: number) {
 )}
             </div>
 
-           <div className="flex gap-2 items-center">
+           {isRejected && (
+             <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs">
+               <div className="flex items-center justify-between gap-2">
+                 <div>
+                   <span className="font-medium text-destructive">Rejected</span>
+                   {candidateData?.rejectionReason && (
+                     <span className="text-muted-foreground">
+                       {" — "}
+                       {candidateData.rejectionReason}
+                     </span>
+                   )}
+                 </div>
+                 <Button
+                   size="sm"
+                   variant="outline"
+                   className="h-7 gap-1.5"
+                   onClick={unrejectCandidate}
+                 >
+                   <Undo2 className="w-3.5 h-3.5" /> Restore
+                 </Button>
+               </div>
+             </div>
+           )}
+
+           <div className="flex gap-2 items-center flex-wrap">
   <Button size="sm" className="gap-2" onClick={() => setEmailOpen(true)}>
     <Send className="w-3.5 h-3.5" /> Send email
   </Button>
@@ -219,9 +314,13 @@ function moveCandidate(stageId: number) {
   <Select
   value={String(candidate.data.stageId)}
   onValueChange={(v) => moveCandidate(Number(v))}
+  disabled={isMoving}
 >
   <SelectTrigger className="w-[160px] h-8 text-xs">
     <SelectValue placeholder="Move to stage" />
+    {isMoving && (
+      <Loader2 className="ml-2 h-4 w-4 animate-spin" />
+    )}
   </SelectTrigger>
 
   <SelectContent>
@@ -240,7 +339,58 @@ function moveCandidate(stageId: number) {
     ))}
   </SelectContent>
 </Select>
+
+  {!isRejected && (
+    <Button
+      size="sm"
+      variant="outline"
+      className="gap-2 ml-auto text-destructive hover:text-destructive"
+      onClick={() => {
+        setRejectReason("");
+        setRejectOpen(true);
+      }}
+    >
+      <Ban className="w-3.5 h-3.5" /> Reject
+    </Button>
+  )}
 </div>
+
+           <AlertDialog open={rejectOpen} onOpenChange={setRejectOpen}>
+             <AlertDialogContent>
+               <AlertDialogHeader>
+                 <AlertDialogTitle>
+                   Reject {candidateData?.name}?
+                 </AlertDialogTitle>
+                 <AlertDialogDescription>
+                   They'll be moved out of the active pipeline. You can
+                   restore them later from this drawer.
+                 </AlertDialogDescription>
+               </AlertDialogHeader>
+               <div className="space-y-1.5">
+                 <Label htmlFor="single-reject-reason">
+                   Reason (optional)
+                 </Label>
+                 <Textarea
+                   id="single-reject-reason"
+                   value={rejectReason}
+                   onChange={(e) => setRejectReason(e.target.value)}
+                   rows={3}
+                 />
+               </div>
+               <AlertDialogFooter>
+                 <AlertDialogCancel>Cancel</AlertDialogCancel>
+                 <AlertDialogAction
+                   className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                   onClick={(e) => {
+                     e.preventDefault();
+                     void rejectCandidate();
+                   }}
+                 >
+                   Reject
+                 </AlertDialogAction>
+               </AlertDialogFooter>
+             </AlertDialogContent>
+           </AlertDialog>
 
 
             <div>

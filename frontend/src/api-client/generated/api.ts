@@ -3085,4 +3085,6 @@ export const ListCandidatesResponseItem = zod.object({
   score: zod.number().int().nullish(),
   stageId: zod.number(),
   createdAt: zod.coerce.date(),
+  rejectedAt: zod.coerce.date().nullish(),
+  rejectionReason: zod.string().nullish(),
 });

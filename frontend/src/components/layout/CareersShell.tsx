@@ -1,14 +1,11 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Link, useLocation } from "wouter";
-import { Sparkles, LogOut } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { useAuth } from "@/hooks/use-auth";
+import { Sparkles } from "lucide-react";
 
 export function CareersShell({ children }: { children: ReactNode }) {
-  const { user, logout } = useAuth();
-  const [location, navigate] = useLocation();
+  const [location] = useLocation();
   const slugMatch = location.match(/^\/careers\/([^/]+)(?:\/.*)?$/);
-  const reserved = new Set(["login", "signup", "me", "jobs"]);
+  const reserved = new Set(["jobs"]);
   const slug = slugMatch && !reserved.has(slugMatch[1]) ? slugMatch[1] : null;
   const [agencyName, setAgencyName] = useState<string | null>(null);
   const careersHome = slug ? `/careers/${slug}` : "/careers";
@@ -45,32 +42,6 @@ export function CareersShell({ children }: { children: ReactNode }) {
           </Link>
           <nav className="flex items-center gap-2">
             <Link href={careersHome} className="text-sm px-3 py-1.5 rounded-md hover:bg-muted">Open roles</Link>
-            {user.kind === "candidate" ? (
-              <>
-                <Link href="/careers/me" className="text-sm px-3 py-1.5 rounded-md hover:bg-muted">My applications</Link>
-                <span className="hidden sm:inline text-sm text-muted-foreground ml-2">{user.name}</span>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={async () => {
-                    await logout();
-                    navigate("/careers");
-                  }}
-                >
-                  <LogOut className="w-4 h-4 mr-1" />
-                  Sign out
-                </Button>
-              </>
-            ) : (
-              <>
-                <Link href="/careers/login">
-                  <Button size="sm" variant="ghost">Sign in</Button>
-                </Link>
-                <Link href="/careers/signup">
-                  <Button size="sm">Create account</Button>
-                </Link>
-              </>
-            )}
           </nav>
         </div>
       </header>

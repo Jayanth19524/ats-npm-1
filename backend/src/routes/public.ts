@@ -1,5 +1,6 @@
 import { Router, type IRouter } from "express";
 import { and, asc, desc, eq } from "drizzle-orm";
+import { z } from "zod";
 import {
   db,
   jobsTable,
@@ -9,10 +10,17 @@ import {
   candidateNotesTable,
   activityTable,
   organizationsTable,
+  jobQuestionsTable,
+  candidateAnswersTable,
 } from "../db/index.js";
 import { getApplicant, requireCandidate } from "../lib/viewer";
+import { issueChallenge, verifyChallenge } from "../lib/captcha";
 
 const router: IRouter = Router();
+
+router.get("/public/captcha", (_req, res): void => {
+  res.json(issueChallenge());
+});
 
 // List all agencies (used by /careers landing)
 router.get("/public/agencies", async (_req, res): Promise<void> => {
@@ -90,9 +98,9 @@ router.get("/public/agencies/:slug/jobs/:id", async (req, res): Promise<void> =>
   res.json({ ...job, organizationName: org.name, organizationSlug: org.slug });
 });
 
-router.post(
-  "/public/agencies/:slug/jobs/:id/apply",
-  requireCandidate,
+// Public application form definition for a job (used by careers page)
+router.get(
+  "/public/agencies/:slug/jobs/:id/questions",
   async (req, res): Promise<void> => {
     const slug = String(req.params.slug || "");
     const jobId = Number(req.params.id);
@@ -100,11 +108,85 @@ router.post(
       res.status(400).json({ error: "Invalid job id" });
       return;
     }
-    const applicant = await getApplicant(req);
-    if (!applicant) {
-      res.status(401).json({ error: "Sign in required" });
+    const [org] = await db
+      .select()
+      .from(organizationsTable)
+      .where(eq(organizationsTable.slug, slug));
+    if (!org) {
+      res.status(404).json({ error: "Agency not found" });
       return;
     }
+    const [job] = await db
+      .select()
+      .from(jobsTable)
+      .where(
+        and(
+          eq(jobsTable.id, jobId),
+          eq(jobsTable.organizationId, org.id),
+          eq(jobsTable.status, "open"),
+        ),
+      );
+    if (!job) {
+      res.status(404).json({ error: "Job not found" });
+      return;
+    }
+    const rows = await db
+      .select()
+      .from(jobQuestionsTable)
+      .where(eq(jobQuestionsTable.jobId, jobId))
+      .orderBy(asc(jobQuestionsTable.position));
+    res.json(rows);
+  },
+);
+
+const ApplyBody = z.object({
+  name: z.string().trim().min(1).max(160),
+  email: z.string().trim().email().max(254),
+  phone: z.string().trim().max(40).optional().or(z.literal("")),
+  location: z.string().trim().max(160).optional().or(z.literal("")),
+  currentTitle: z.string().trim().max(160).optional().or(z.literal("")),
+  coverLetter: z.string().max(10_000).optional().or(z.literal("")),
+  resumeUrl: z.string().max(2048).optional().or(z.literal("")),
+  resumeKey: z.string().max(512).optional().or(z.literal("")),
+  resumeFilename: z.string().max(256).optional().or(z.literal("")),
+  resumeMimeType: z.string().max(128).optional().or(z.literal("")),
+  resumeSize: z.number().int().nonnegative().optional(),
+  captchaToken: z.string().min(1),
+  captchaAnswer: z.union([z.string(), z.number()]),
+  answers: z
+    .array(
+      z.object({
+        questionId: z.number().int(),
+        value: z.union([z.string(), z.array(z.string())]),
+      }),
+    )
+    .max(15)
+    .optional()
+    .default([]),
+});
+
+router.post(
+  "/public/agencies/:slug/jobs/:id/apply",
+  async (req, res): Promise<void> => {
+    const slug = String(req.params.slug || "");
+    const jobId = Number(req.params.id);
+    if (!Number.isInteger(jobId)) {
+      res.status(400).json({ error: "Invalid job id" });
+      return;
+    }
+    const parsed = ApplyBody.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Invalid input" });
+      return;
+    }
+    const data = parsed.data;
+
+    const captcha = verifyChallenge(data.captchaToken, data.captchaAnswer);
+    if (!captcha.ok) {
+      res.status(400).json({ error: captcha.reason });
+      return;
+    }
+
     const [org] = await db
       .select()
       .from(organizationsTable)
@@ -127,19 +209,24 @@ router.post(
       res.status(404).json({ error: "Job not found or no longer open" });
       return;
     }
-    const [existing] = await db
-      .select()
+
+    // Block duplicate applications by email per job
+    const [duplicate] = await db
+      .select({ id: candidatesTable.id })
       .from(candidatesTable)
       .where(
         and(
           eq(candidatesTable.jobId, jobId),
-          eq(candidatesTable.applicantId, applicant.id),
+          eq(candidatesTable.email, data.email.toLowerCase()),
         ),
       );
-    if (existing) {
-      res.status(409).json({ error: "You have already applied to this role" });
+    if (duplicate) {
+      res
+        .status(409)
+        .json({ error: "An application with this email already exists for this role" });
       return;
     }
+
     const [firstStage] = await db
       .select()
       .from(stagesTable)
@@ -147,61 +234,120 @@ router.post(
       .orderBy(asc(stagesTable.position))
       .limit(1);
     if (!firstStage) {
-      res.status(400).json({ error: "This job is not yet accepting applications" });
+      res
+        .status(400)
+        .json({ error: "This job is not yet accepting applications" });
       return;
     }
-    const {
-      coverLetter,
-      resumeUrl,
-      resumeKey,
-      resumeFilename,
-      resumeMimeType,
-      resumeSize,
-      currentTitle,
-    } = req.body ?? {};
+
+    // Validate answers against questions
+    const questions = await db
+      .select()
+      .from(jobQuestionsTable)
+      .where(eq(jobQuestionsTable.jobId, jobId));
+    const qById = new Map(questions.map((q) => [q.id, q]));
+    const answersByQid = new Map(
+      data.answers.map((a) => [a.questionId, a.value] as const),
+    );
+    for (const q of questions) {
+      const v = answersByQid.get(q.id);
+      const isEmpty =
+        v === undefined ||
+        (typeof v === "string" && v.trim() === "") ||
+        (Array.isArray(v) && v.length === 0);
+      if (q.required && isEmpty) {
+        res.status(400).json({ error: `Please answer: ${q.label}` });
+        return;
+      }
+      if (isEmpty) continue;
+      if (q.type === "single_select") {
+        if (typeof v !== "string" || !(q.options ?? []).includes(v)) {
+          res.status(400).json({ error: `Invalid choice for: ${q.label}` });
+          return;
+        }
+      } else if (q.type === "multi_select") {
+        if (!Array.isArray(v) || v.some((x) => !(q.options ?? []).includes(x))) {
+          res.status(400).json({ error: `Invalid choice for: ${q.label}` });
+          return;
+        }
+      } else if (q.type === "text_digit") {
+        if (typeof v !== "string" || !/^-?\d+(\.\d+)?$/.test(v.trim())) {
+          res.status(400).json({ error: `${q.label} must be a number` });
+          return;
+        }
+      } else if (q.type === "text_short") {
+        if (typeof v !== "string" || v.length > 280) {
+          res.status(400).json({ error: `${q.label} is too long` });
+          return;
+        }
+      } else if (q.type === "text_long") {
+        if (typeof v !== "string" || v.length > 5000) {
+          res.status(400).json({ error: `${q.label} is too long` });
+          return;
+        }
+      }
+    }
+
+    // If the applicant happens to be logged in as a candidate, link the row.
+    const applicant = await getApplicant(req);
+
     const [c] = await db
       .insert(candidatesTable)
       .values({
         organizationId: job.organizationId,
         jobId,
         stageId: firstStage.id,
-        name: applicant.name,
-        email: applicant.email,
-        phone: applicant.phone,
-        location: applicant.location,
-        currentTitle:
-          typeof currentTitle === "string" && currentTitle ? currentTitle : null,
-        resumeUrl: typeof resumeUrl === "string" && resumeUrl ? resumeUrl : null,
-        resumeKey: typeof resumeKey === "string" && resumeKey ? resumeKey : null,
-        resumeFilename:
-          typeof resumeFilename === "string" && resumeFilename ? resumeFilename : null,
-        resumeMimeType:
-          typeof resumeMimeType === "string" && resumeMimeType ? resumeMimeType : null,
-        resumeSize: typeof resumeSize === "number" ? resumeSize : null,
-        resumeUploadedAt:
-          typeof resumeKey === "string" && resumeKey ? new Date() : null,
-        source: "direct",
-        applicantId: applicant.id,
+        name: data.name,
+        email: data.email.toLowerCase(),
+        phone: data.phone || null,
+        location: data.location || null,
+        currentTitle: data.currentTitle || null,
+        resumeUrl: data.resumeUrl || null,
+        resumeKey: data.resumeKey || null,
+        resumeFilename: data.resumeFilename || null,
+        resumeMimeType: data.resumeMimeType || null,
+        resumeSize: typeof data.resumeSize === "number" ? data.resumeSize : null,
+        resumeUploadedAt: data.resumeKey ? new Date() : null,
+        source: "careers",
+        applicantId: applicant?.id ?? null,
       })
       .returning();
+
     await db
       .insert(candidateStagesTable)
       .values({ candidateId: c.id, stageId: firstStage.id });
-    if (typeof coverLetter === "string" && coverLetter.trim()) {
+
+    if (data.answers.length > 0) {
+      const rows = data.answers
+        .filter((a) => qById.has(a.questionId))
+        .map((a) => ({
+          candidateId: c.id,
+          questionId: a.questionId,
+          value:
+            typeof a.value === "string"
+              ? JSON.stringify(a.value)
+              : JSON.stringify(a.value),
+        }));
+      if (rows.length > 0) {
+        await db.insert(candidateAnswersTable).values(rows);
+      }
+    }
+
+    if (data.coverLetter && data.coverLetter.trim()) {
       await db.insert(candidateNotesTable).values({
         candidateId: c.id,
-        body: `Cover letter from applicant:\n\n${coverLetter.trim()}`,
+        body: `Cover letter from applicant:\n\n${data.coverLetter.trim()}`,
         authorId: null,
       });
     }
     await db.insert(activityTable).values({
       organizationId: job.organizationId,
       type: "candidate_created",
-      message: `${applicant.name} applied to ${job.title}`,
+      message: `${data.name} applied to ${job.title}`,
       candidateId: c.id,
       jobId: c.jobId,
     });
-    res.status(201).json(c);
+    res.status(201).json({ id: c.id });
   },
 );
 

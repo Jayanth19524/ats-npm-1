@@ -18,7 +18,16 @@ import {
   getListJobsQueryKey,
 } from "@/api-client";
 import { useLocation } from "wouter";
-import { ArrowLeft, MapPin, Briefcase, Trash2, Mail, Plus, X } from "lucide-react";
+import {
+  ArrowLeft,
+  MapPin,
+  Briefcase,
+  Trash2,
+  Mail,
+  Plus,
+  X,
+  Pencil,
+} from "lucide-react";
 import { PageContainer } from "@/components/layout/PageHeader";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -26,6 +35,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
@@ -43,7 +53,18 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { STATUS_COLORS, formatDate } from "@/lib/format";
+import { formatEmploymentType } from "@/lib/utils";
+import { ApplicationFormEditor } from "@/components/ApplicationFormEditor";
+import { RichTextEditor } from "@/components/RichTextEditor";
 
 const NEW_STAGE_DEFAULT_COLOR = "#6366f1";
 
@@ -61,6 +82,7 @@ export function JobDetailPage() {
   const qc = useQueryClient();
   const [newStageName, setNewStageName] = useState("");
   const [confirmDeleteJob, setConfirmDeleteJob] = useState(false);
+  const [editJobOpen, setEditJobOpen] = useState(false);
 
   useEffect(() => {
     document.title = job.data ? `${job.data.title} · Pulse` : "Job · Pulse";
@@ -227,7 +249,23 @@ export function JobDetailPage() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 space-y-6">
           <Card className="p-6">
-            <h2 className="font-semibold mb-3">About this role</h2>
+            <div className="flex items-start justify-between gap-4 mb-3">
+              <div>
+                <h2 className="font-semibold">About this role</h2>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {formatEmploymentType(j.employmentType)}
+                </p>
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setEditJobOpen(true)}
+                className="gap-1.5"
+              >
+                <Pencil className="w-3.5 h-3.5" /> Edit
+              </Button>
+            </div>
             {(j.requiredSkills && j.requiredSkills.length > 0) ||
             (typeof j.minExperience === "number" && j.minExperience > 0) ? (
               <div className="flex flex-wrap items-center gap-1.5 mb-4">
@@ -250,6 +288,17 @@ export function JobDetailPage() {
               <p className="text-sm text-muted-foreground">No description yet.</p>
             )}
           </Card>
+
+          <EditJobDialog
+            key={`edit-${j.id}-${editJobOpen}`}
+            open={editJobOpen}
+            onOpenChange={setEditJobOpen}
+            job={j}
+            onSaved={() => {
+              qc.invalidateQueries({ queryKey: getGetJobQueryKey(j.id) });
+              qc.invalidateQueries({ queryKey: getListJobsQueryKey() });
+            }}
+          />
 
           <Card className="p-6">
             <div className="flex items-start justify-between mb-4 gap-4">
@@ -298,6 +347,8 @@ export function JobDetailPage() {
               </Button>
             </div>
           </Card>
+
+          <ApplicationFormEditor jobId={j.id} />
         </div>
 
         <Card className="p-6 h-fit">
@@ -489,5 +540,238 @@ function StageRow({
         */}
       </div>
     </Card>
+  );
+}
+
+type JobForEdit = NonNullable<ReturnType<typeof useGetJob>["data"]>;
+
+function EditJobDialog({
+  open,
+  onOpenChange,
+  job,
+  onSaved,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  job: JobForEdit;
+  onSaved: () => void;
+}) {
+  const updateJob = useUpdateJob();
+  const [title, setTitle] = useState(job.title);
+  const [department, setDepartment] = useState(job.department ?? "");
+  const [location, setLocation] = useState(job.location ?? "");
+  const [employmentType, setEmploymentType] = useState(
+    job.employmentType ?? "full_time",
+  );
+  const [description, setDescription] = useState(job.description ?? "");
+  const [requiredSkills, setRequiredSkills] = useState<string[]>(
+    job.requiredSkills ?? [],
+  );
+  const [skillInput, setSkillInput] = useState("");
+  const [minExperience, setMinExperience] = useState<string>(
+    typeof job.minExperience === "number" ? String(job.minExperience) : "",
+  );
+
+  const addSkill = () => {
+    const value = skillInput.trim();
+    if (!value) return;
+    if (requiredSkills.some((s) => s.toLowerCase() === value.toLowerCase())) {
+      setSkillInput("");
+      return;
+    }
+    setRequiredSkills([...requiredSkills, value]);
+    setSkillInput("");
+  };
+  const removeSkill = (skill: string) =>
+    setRequiredSkills(requiredSkills.filter((s) => s !== skill));
+
+  const onSave = () => {
+    const trimmedTitle = title.trim();
+    if (trimmedTitle.length < 2) {
+      toast.error("Title must be at least 2 characters.");
+      return;
+    }
+    let parsedExp: number | null = null;
+    if (minExperience.trim() !== "") {
+      const n = Number(minExperience);
+      if (!Number.isInteger(n) || n < 0 || n > 60) {
+        toast.error("Minimum experience must be a whole number between 0 and 60.");
+        return;
+      }
+      parsedExp = n;
+    }
+    updateJob.mutate(
+      {
+        id: job.id,
+        data: {
+          title: trimmedTitle,
+          department: department.trim(),
+          location: location.trim(),
+          employmentType,
+          description,
+          requiredSkills,
+          minExperience: parsedExp,
+        },
+      },
+      {
+        onSuccess: () => {
+          toast.success("Job details updated");
+          onSaved();
+          onOpenChange(false);
+        },
+        onError: () => toast.error("Could not save changes. Please try again."),
+      },
+    );
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>Edit job details</DialogTitle>
+          <DialogDescription>
+            Update the role information shown to your team and on the public
+            careers page.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-4">
+          <div className="space-y-1.5">
+            <Label className="text-sm font-medium">Job title</Label>
+            <Input
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="e.g. Senior Product Designer"
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-1.5">
+              <Label className="text-sm font-medium">Department</Label>
+              <Input
+                value={department}
+                onChange={(e) => setDepartment(e.target.value)}
+                placeholder="Design"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-sm font-medium">Location</Label>
+              <Input
+                value={location}
+                onChange={(e) => setLocation(e.target.value)}
+                placeholder="Remote"
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-1.5">
+              <Label className="text-sm font-medium">Employment type</Label>
+              <Select
+                value={employmentType}
+                onValueChange={(v) => setEmploymentType(v)}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="full_time">Full time</SelectItem>
+                  <SelectItem value="part_time">Part time</SelectItem>
+                  <SelectItem value="contract">Contract</SelectItem>
+                  <SelectItem value="internship">Internship</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-sm font-medium">
+                Minimum years of experience
+              </Label>
+              <Input
+                type="number"
+                inputMode="numeric"
+                min={0}
+                max={60}
+                value={minExperience}
+                onChange={(e) => setMinExperience(e.target.value)}
+                placeholder="e.g. 3"
+              />
+            </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label className="text-sm font-medium">Required skills</Label>
+            <div className="flex gap-2">
+              <Input
+                placeholder="Type a skill and press Enter"
+                value={skillInput}
+                onChange={(e) => setSkillInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === ",") {
+                    e.preventDefault();
+                    addSkill();
+                  } else if (
+                    e.key === "Backspace" &&
+                    skillInput === "" &&
+                    requiredSkills.length > 0
+                  ) {
+                    removeSkill(requiredSkills[requiredSkills.length - 1]);
+                  }
+                }}
+              />
+              <Button type="button" variant="outline" onClick={addSkill}>
+                Add
+              </Button>
+            </div>
+            {requiredSkills.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 pt-1">
+                {requiredSkills.map((skill) => (
+                  <Badge key={skill} variant="secondary" className="gap-1 pr-1">
+                    {skill}
+                    <button
+                      type="button"
+                      aria-label={`Remove ${skill}`}
+                      onClick={() => removeSkill(skill)}
+                      className="rounded hover:bg-muted-foreground/20 p-0.5"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </Badge>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="space-y-1.5">
+            <Label className="text-sm font-medium">Description</Label>
+            <RichTextEditor
+              value={description}
+              onChange={(html) => setDescription(html)}
+              placeholder="What does this role do? Who's the ideal candidate?"
+            />
+            <p className="text-xs text-muted-foreground">
+              Shown to candidates on the public job page.
+            </p>
+          </div>
+        </div>
+
+        <DialogFooter>
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={() => onOpenChange(false)}
+            disabled={updateJob.isPending}
+          >
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            onClick={onSave}
+            disabled={updateJob.isPending}
+          >
+            {updateJob.isPending ? "Saving…" : "Save changes"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

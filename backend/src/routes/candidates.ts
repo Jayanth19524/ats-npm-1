@@ -1,5 +1,6 @@
 import { Router, type IRouter } from "express";
-import { and, asc, desc, eq, ilike, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
+import { z } from "zod";
 import {
   db,
   candidatesTable,
@@ -241,7 +242,7 @@ router.post("/candidates/:id/move", async (req, res): Promise<void> => {
   }
   const [c] = await db
     .update(candidatesTable)
-    .set({ stageId: parsed.data.stageId })
+    .set({ stageId: parsed.data.stageId, rejectedAt: null, rejectionReason: null })
     .where(and(eq(candidatesTable.id, params.data.id), eq(candidatesTable.organizationId, orgId)))
     .returning();
   if (!c) {
@@ -449,6 +450,327 @@ router.post("/candidates/:id/email", async (req, res): Promise<void> => {
     to: c.email,
     subject: finalSubject,
   });
+});
+
+// ─── Reject (single) ─────────────────────────────────────────────────────────
+router.post("/candidates/:id/reject", async (req, res): Promise<void> => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) {
+    res.status(400).json({ error: "Invalid candidate id" });
+    return;
+  }
+  const reason =
+    typeof req.body?.reason === "string" ? req.body.reason.slice(0, 500) : null;
+  const orgId = orgIdOf(req);
+  const viewer = await getViewer(req);
+  const [c] = await db
+    .update(candidatesTable)
+    .set({ rejectedAt: new Date(), rejectionReason: reason })
+    .where(
+      and(eq(candidatesTable.id, id), eq(candidatesTable.organizationId, orgId)),
+    )
+    .returning();
+  if (!c) {
+    res.status(404).json({ error: "Candidate not found" });
+    return;
+  }
+  await db.insert(activityTable).values({
+    organizationId: orgId,
+    type: "candidate_rejected",
+    message: `${viewer.name} rejected ${c.name}${reason ? ` — ${reason}` : ""}`,
+    candidateId: c.id,
+    jobId: c.jobId,
+  });
+  res.json({ id: c.id, rejectedAt: c.rejectedAt, rejectionReason: c.rejectionReason });
+});
+
+router.post("/candidates/:id/unreject", async (req, res): Promise<void> => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) {
+    res.status(400).json({ error: "Invalid candidate id" });
+    return;
+  }
+  const orgId = orgIdOf(req);
+  const [c] = await db
+    .update(candidatesTable)
+    .set({ rejectedAt: null, rejectionReason: null })
+    .where(
+      and(eq(candidatesTable.id, id), eq(candidatesTable.organizationId, orgId)),
+    )
+    .returning();
+  if (!c) {
+    res.status(404).json({ error: "Candidate not found" });
+    return;
+  }
+  res.json({ id: c.id, rejectedAt: null });
+});
+
+// ─── Bulk operations ─────────────────────────────────────────────────────────
+const BulkIdsBody = z.object({
+  candidateIds: z.array(z.number().int().positive()).min(1).max(500),
+});
+
+const BulkMoveBody = BulkIdsBody.extend({
+  stageId: z.number().int().positive(),
+  sendEmailTemplateId: z.number().int().positive().nullish(),
+});
+
+const BulkRejectBody = BulkIdsBody.extend({
+  reason: z.string().max(500).optional(),
+});
+
+const BulkEmailBody = BulkIdsBody.extend({
+  templateId: z.number().int().positive().nullish(),
+  subject: z.string().max(280).optional(),
+  body: z.string().max(20_000).optional(),
+});
+
+async function loadCandidatesForOrg(ids: number[], orgId: number) {
+  return db
+    .select()
+    .from(candidatesTable)
+    .where(
+      and(
+        eq(candidatesTable.organizationId, orgId),
+        inArray(candidatesTable.id, ids),
+      ),
+    );
+}
+
+router.post("/candidates/bulk-move", async (req, res): Promise<void> => {
+  const parsed = BulkMoveBody.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.issues[0]?.message });
+    return;
+  }
+  const orgId = orgIdOf(req);
+  const viewer = await getViewer(req);
+  const { candidateIds, stageId, sendEmailTemplateId } = parsed.data;
+
+  const [stage] = await db
+    .select()
+    .from(stagesTable)
+    .where(
+      and(eq(stagesTable.id, stageId), eq(stagesTable.organizationId, orgId)),
+    );
+  if (!stage) {
+    res.status(404).json({ error: "Stage not found" });
+    return;
+  }
+
+  const candidates = await loadCandidatesForOrg(candidateIds, orgId);
+  if (candidates.length === 0) {
+    res.status(404).json({ error: "No matching candidates" });
+    return;
+  }
+
+  // Resolve template if requested
+  let template: { subject: string; body: string } | null = null;
+  if (sendEmailTemplateId) {
+    const [tpl] = await db
+      .select()
+      .from(emailTemplatesTable)
+      .where(
+        and(
+          eq(emailTemplatesTable.id, sendEmailTemplateId),
+          eq(emailTemplatesTable.organizationId, orgId),
+        ),
+      );
+    if (!tpl) {
+      res.status(404).json({ error: "Email template not found" });
+      return;
+    }
+    template = { subject: tpl.subject, body: tpl.body };
+  }
+
+  // Move each candidate (also clear rejection status so they re-enter the pipeline)
+  await db
+    .update(candidatesTable)
+    .set({ stageId, rejectedAt: null, rejectionReason: null })
+    .where(
+      and(
+        eq(candidatesTable.organizationId, orgId),
+        inArray(
+          candidatesTable.id,
+          candidates.map((c) => c.id),
+        ),
+      ),
+    );
+
+  await db.insert(candidateStagesTable).values(
+    candidates.map((c) => ({
+      candidateId: c.id,
+      stageId,
+      movedBy: viewer.id,
+    })),
+  );
+
+  await db.insert(activityTable).values(
+    candidates.map((c) => ({
+      organizationId: orgId,
+      type: "candidate_moved",
+      message: `${viewer.name} moved ${c.name} to ${stage.name}`,
+      candidateId: c.id,
+      jobId: c.jobId,
+    })),
+  );
+
+  let emailsSent = 0;
+  let emailsFailed = 0;
+
+  // Email-on-move (either explicit templateId or stage's own configured template)
+  const effectiveTemplate =
+    template ??
+    (stage.sendEmail && stage.templateId
+      ? await db
+          .select()
+          .from(emailTemplatesTable)
+          .where(eq(emailTemplatesTable.id, stage.templateId))
+          .then((r) => (r[0] ? { subject: r[0].subject, body: r[0].body } : null))
+      : null);
+
+  if (effectiveTemplate) {
+    const jobIds = Array.from(new Set(candidates.map((c) => c.jobId)));
+    const jobs = await db
+      .select()
+      .from(jobsTable)
+      .where(inArray(jobsTable.id, jobIds));
+    const jobById = new Map(jobs.map((j) => [j.id, j] as const));
+    for (const c of candidates) {
+      const vars = {
+        candidate_name: c.name,
+        job_title: jobById.get(c.jobId)?.title ?? "",
+        stage_name: stage.name,
+        sender_name: viewer.name,
+      };
+      const r = await sendEmail({
+        to: c.email,
+        subject: renderTemplate(effectiveTemplate.subject, vars),
+        body: renderTemplate(effectiveTemplate.body, vars),
+      });
+      if (r.delivered) emailsSent++;
+      else emailsFailed++;
+    }
+  }
+
+  res.json({
+    moved: candidates.length,
+    stageId,
+    emailsSent,
+    emailsFailed,
+  });
+});
+
+router.post("/candidates/bulk-reject", async (req, res): Promise<void> => {
+  const parsed = BulkRejectBody.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.issues[0]?.message });
+    return;
+  }
+  const orgId = orgIdOf(req);
+  const viewer = await getViewer(req);
+  const candidates = await loadCandidatesForOrg(parsed.data.candidateIds, orgId);
+  if (candidates.length === 0) {
+    res.status(404).json({ error: "No matching candidates" });
+    return;
+  }
+  const reason = parsed.data.reason?.trim() || null;
+  await db
+    .update(candidatesTable)
+    .set({ rejectedAt: new Date(), rejectionReason: reason })
+    .where(
+      and(
+        eq(candidatesTable.organizationId, orgId),
+        inArray(
+          candidatesTable.id,
+          candidates.map((c) => c.id),
+        ),
+      ),
+    );
+  await db.insert(activityTable).values(
+    candidates.map((c) => ({
+      organizationId: orgId,
+      type: "candidate_rejected",
+      message: `${viewer.name} rejected ${c.name}${reason ? ` — ${reason}` : ""}`,
+      candidateId: c.id,
+      jobId: c.jobId,
+    })),
+  );
+  res.json({ rejected: candidates.length });
+});
+
+router.post("/candidates/bulk-email", async (req, res): Promise<void> => {
+  const parsed = BulkEmailBody.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.issues[0]?.message });
+    return;
+  }
+  const orgId = orgIdOf(req);
+  const viewer = await getViewer(req);
+  let subject = parsed.data.subject ?? "";
+  let body = parsed.data.body ?? "";
+  if (parsed.data.templateId) {
+    const [tpl] = await db
+      .select()
+      .from(emailTemplatesTable)
+      .where(
+        and(
+          eq(emailTemplatesTable.id, parsed.data.templateId),
+          eq(emailTemplatesTable.organizationId, orgId),
+        ),
+      );
+    if (!tpl) {
+      res.status(404).json({ error: "Template not found" });
+      return;
+    }
+    if (!subject) subject = tpl.subject;
+    if (!body) body = tpl.body;
+  }
+  if (!subject || !body) {
+    res.status(400).json({ error: "Subject and body are required" });
+    return;
+  }
+  const candidates = await loadCandidatesForOrg(parsed.data.candidateIds, orgId);
+  if (candidates.length === 0) {
+    res.status(404).json({ error: "No matching candidates" });
+    return;
+  }
+  const jobIds = Array.from(new Set(candidates.map((c) => c.jobId)));
+  const jobs = jobIds.length
+    ? await db.select().from(jobsTable).where(inArray(jobsTable.id, jobIds))
+    : [];
+  const jobById = new Map(jobs.map((j) => [j.id, j] as const));
+  let sent = 0;
+  let failed = 0;
+  for (const c of candidates) {
+    const vars = {
+      candidate_name: c.name,
+      job_title: jobById.get(c.jobId)?.title ?? "",
+      sender_name: viewer.name,
+    };
+    const subj = renderTemplate(subject, vars);
+    const bod = renderTemplate(body, vars);
+    const r = await sendEmail({ to: c.email, subject: subj, body: bod });
+    if (r.delivered) sent++;
+    else failed++;
+    await db.insert(candidateNotesTable).values({
+      candidateId: c.id,
+      body: r.delivered
+        ? `Bulk email sent to ${c.email}\nSubject: ${subj}\n\n${bod}`
+        : `Bulk email NOT sent to ${c.email} (${r.reason || "no smtp"})\nSubject: ${subj}\n\n${bod}`,
+      authorId: viewer.id,
+    });
+    await db.insert(activityTable).values({
+      organizationId: orgId,
+      type: "email_sent",
+      message: r.delivered
+        ? `${viewer.name} emailed ${c.name}: ${subj}`
+        : `${viewer.name} attempted to email ${c.name} (${r.reason || "no smtp"})`,
+      candidateId: c.id,
+      jobId: c.jobId,
+    });
+  }
+  res.json({ sent, failed, total: candidates.length, emailConfigured: isEmailConfigured() });
 });
 
 export default router;

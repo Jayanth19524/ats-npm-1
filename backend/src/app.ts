@@ -81,4 +81,12 @@ app.get("/careers/reset-password", (req, res) => {
 
 app.use("/api", router);
 
+if (process.env.SERVE_FRONTEND === "true") {
+  const frontendDist = path.resolve(process.cwd(), "../frontend/dist");
+  app.use(express.static(frontendDist, { maxAge: "1d" }));
+  app.get(/^(?!\/api\/).*/, (_req, res) => {
+    res.sendFile(path.join(frontendDist, "index.html"));
+  });
+}
+
 export default app;
